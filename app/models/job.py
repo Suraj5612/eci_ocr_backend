@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy import Column, String, DateTime, ForeignKey, JSON
 from app.db.base import Base
 from datetime import datetime, timezone
 import uuid
@@ -12,7 +12,8 @@ class Job(Base):
 
     image_path = Column(String, nullable=False)
 
-    status = Column(String, default="pending")  # pending, processing, completed, failed
+    status = Column(String, default="pending")
+    result = Column(JSON, nullable=True)
     error_message = Column(String, nullable=True)
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
