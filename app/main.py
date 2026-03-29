@@ -3,6 +3,7 @@ from app.db.session import engine
 from app.db.base import Base
 
 from app.api.routes import auth
+from app.api.routes import ocr
 
 from fastapi.responses import JSONResponse
 from fastapi.requests import Request
@@ -14,6 +15,7 @@ app = FastAPI()
 Base.metadata.create_all(bind=engine)
 
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
+app.include_router(ocr.router, prefix="/ocr", tags=["OCR"])
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
