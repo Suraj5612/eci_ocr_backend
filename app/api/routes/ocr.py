@@ -2,20 +2,17 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status
 from sqlalchemy.orm import Session
 from app.api.deps import get_db, get_current_user
 from app.schemas.ocr import UploadResponse
-from app.repositories.job_repo import create_job
+from app.utils.exceptions import AppException
+from app.repositories.job_repo import create_job, get_job_by_id
 from app.core.storage import upload_image
 import uuid
 
 
 router = APIRouter()
 
-
-# 🔥 Allowed types
 ALLOWED_TYPES = ["image/jpeg", "image/png", "image/jpg", "image/webp"]
 
-# 🔥 Max size (10MB)
 MAX_FILE_SIZE = 10 * 1024 * 1024
-
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_ocr(
@@ -61,4 +58,45 @@ async def upload_ocr(
     return {
         "job_id": job.id,
         "status": job.status
+    }
+
+@router.get("/result/{job_id}")
+def get_ocr_result(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    job = get_job_by_id(db, job_id)
+
+    if not job:
+        raise AppException(
+            status_code=404,
+            code="JOB_NOT_FOUND",
+            message="Job not found"
+        )
+
+    if job.user_id != current_user.id:
+        raise AppException(
+            status_code=403,
+            code="FORBIDDEN",
+            message="You do not have access to this job"
+        )
+
+    if job.status in ["pending", "processing"]:
+        return {
+            "job_id": job.id,
+            "status": job.status
+        }
+
+    if job.status == "failed":
+        return {
+            "job_id": job.id,
+            "status": "failed",
+            "error": job.error_message
+        }
+
+    return {
+        "job_id": job.id,
+        "status": "completed",
+        "data": job.result
     }

@@ -18,11 +18,21 @@ def get_job_by_id(db: Session, job_id: str):
     return db.query(Job).filter(Job.id == job_id).first()
 
 
-def update_job_status(db: Session, job_id: str, status: str, error_message: str = None):
+def update_job_status(
+    db: Session,
+    job_id: str,
+    status: str,
+    result: dict = None,
+    error_message: str = None
+):
     job = get_job_by_id(db, job_id)
+
     if job:
         job.status = status
+        job.result = result
         job.error_message = error_message
+
         db.commit()
         db.refresh(job)
+
     return job
