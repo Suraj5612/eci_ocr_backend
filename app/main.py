@@ -13,7 +13,9 @@ from app.db.base_model import *  # important
 
 # 🔥 NEW IMPORTS
 import threading
+from app.utils.exceptions import AppException
 from app.workers.ocr_worker import worker
+from app.api.routes import voter
 
 
 app = FastAPI()
@@ -23,26 +25,19 @@ Base.metadata.create_all(bind=engine)
 
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(ocr.router, prefix="/ocr", tags=["OCR"])
+app.include_router(voter.router, prefix="/voter", tags=["Voter"])
 
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    errors = []
-
-    for err in exc.errors():
-        errors.append({
-            "field": err["loc"][-1],
-            "message": err["msg"]
-        })
-
+@app.exception_handler(AppException)
+async def app_exception_handler(request: Request, exc: AppException):
     return JSONResponse(
-        status_code=422,
+        status_code=exc.status_code,
         content={
             "success": False,
             "error": {
-                "code": "VALIDATION_ERROR",
-                "message": "Invalid input",
-                "details": errors
+                "code": exc.code,
+                "message": exc.message,
+                "field": exc.field
             }
         }
     )
