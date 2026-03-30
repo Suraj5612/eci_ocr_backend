@@ -10,5 +10,7 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60))
     SUPABASE_URL: str = os.getenv("SUPABASE_URL")
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    SARVAM_BASE_URL: str = os.getenv("SARVAM_BASE_URL")
+    SARVAM_API_KEY: str = os.getenv("SARVAM_API_KEY")
 
 settings = Settings()
