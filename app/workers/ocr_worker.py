@@ -1,66 +1,94 @@
 import time
+import cv2
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.job import Job
 from app.db.base_model import * 
+
 from app.core.image_processing import (
     download_image,
     crop_rois,
-    normalize_lighting,
     save_debug_images,
     enhance_printed,
     enhance_handwritten,
-    enhance_cropped,
-    remove_shadow
+    enhance_cropped
 )
+
+# 🔥 import sarvam
+from app.core.sarvam import run_sarvam
+from app.core.parser import parse_ocr_text
 
 
 POLL_INTERVAL = 3  # seconds
 
 
 def process_job(job: Job, db: Session):
-    print(f"Processing job: {job.id}")
+    print(f"🚀 Processing job: {job.id}")
 
     try:
         # 1. Download image
-        print("Downloading image...")
+        print("⬇️ Downloading image...")
         image = download_image(job.image_path)
-        print("Image downloaded")
+        print("✅ Image downloaded")
 
-        # 2. Decide flow based on fla
-
+        # 2. Process image
         if job.is_cropped:
-            print("🟢 Cropped image → minimal enhancement")
+            print("🟢 Cropped image → enhancement")
 
-            enhanced = enhance_cropped(image)
+            processed = enhance_cropped(image)
 
-            top_left = enhanced
-            form_section = enhanced
+            top_left = processed
+            form_section = processed
 
         else:
-            print("🟡 Not cropped → ROI + specialized enhancement")
+            print("🟡 Not cropped → ROI processing")
 
             top_left, form_section = crop_rois(image)
 
-            # 🔥 remove shadow ONLY for printed
+            # printed
             top_left = enhance_cropped(top_left)
 
-            # 🔥 light enhancement for handwritten
-            form_section = enhance_cropped(form_section)
+            # handwritten (you can later improve)
+            form_section = enhance_handwritten(form_section)
 
-                # 3. Save debug images
-        print("Saving debug images...")
+            # ensure same width
+            w = max(top_left.shape[1], form_section.shape[1])
+
+            top_left_resized = cv2.resize(top_left, (w, top_left.shape[0]))
+            form_section_resized = cv2.resize(form_section, (w, form_section.shape[0]))
+
+            # ensure same type (grayscale)
+            if len(top_left_resized.shape) == 2:
+                top_left_resized = cv2.cvtColor(top_left_resized, cv2.COLOR_GRAY2BGR)
+
+            if len(form_section_resized.shape) == 2:
+                form_section_resized = cv2.cvtColor(form_section_resized, cv2.COLOR_GRAY2BGR)
+
+            # concat
+            processed = cv2.vconcat([top_left_resized, form_section_resized])
+
+        # 3. Save debug images
+        print("💾 Saving debug images...")
         save_debug_images(job.id, top_left, form_section)
-        print("Debug images saved")
+        print("✅ Debug images saved")
 
+        # 🔥 4. CALL SARVAM OCR
+        print("🧠 Calling Sarvam OCR...")
+        ocr_text = run_sarvam(processed)
+
+        print("📄 OCR Text received")
+
+        # 5. Save result
         job.status = "completed"
+        parsed = parse_ocr_text(ocr_text, db)
+
         job.result = {
-            "message": "ROI step done",
-            "is_cropped": job.is_cropped
+            "raw_text": ocr_text,
+            "parsed": parsed
         }
 
     except Exception as e:
-        print(f"ERROR: {str(e)}")
+        print(f"❌ ERROR: {str(e)}")
         job.status = "failed"
         job.error = str(e)
 
@@ -77,7 +105,6 @@ def worker():
         db: Session = SessionLocal()
 
         try:
-            # get one pending job
             job = (
                 db.query(Job)
                 .filter(Job.status == "pending")
@@ -86,11 +113,11 @@ def worker():
             )
 
             if not job:
-                print("No pending jobs...")
+                print("😴 No pending jobs...")
                 time.sleep(POLL_INTERVAL)
                 continue
 
-            # mark as processing
+            # mark processing
             job.status = "processing"
             db.commit()
             db.refresh(job)
@@ -99,11 +126,10 @@ def worker():
                 process_job(job, db)
 
             except Exception as e:
-                print(f"Error processing job {job.id}: {str(e)}")
-
+                print(f"❌ Error processing job {job.id}: {str(e)}")
+                db.rollback()
                 job.status = "failed"
                 job.error = str(e)
-
                 db.commit()
 
         finally:
