@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, String, DateTime, ForeignKey, JSON, Boolean
 from app.db.base import Base
 from datetime import datetime, timezone
 import uuid
@@ -11,6 +11,7 @@ class Job(Base):
     user_id = Column(String, ForeignKey("users.id"), nullable=False)
 
     image_path = Column(String, nullable=False)
+    is_cropped = Column(Boolean, default=False)
 
     status = Column(String, default="pending")
     result = Column(JSON, nullable=True)
