@@ -9,6 +9,8 @@ from fastapi.responses import JSONResponse
 from fastapi.requests import Request
 from fastapi.exceptions import RequestValidationError
 
+from app.db.base_model import *  # important
+
 app = FastAPI()
 
 # Create tables

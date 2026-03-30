@@ -2,11 +2,12 @@ from sqlalchemy.orm import Session
 from app.models.job import Job
 
 
-def create_job(db: Session, user_id: str, image_path: str):
+def create_job(db: Session, user_id: str, image_path: str, is_cropped=False):
     job = Job(
         user_id=user_id,
         image_path=image_path,
-        status="pending"
+        status="pending",
+        is_cropped=is_cropped,
     )
     db.add(job)
     db.commit()

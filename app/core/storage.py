@@ -12,24 +12,28 @@ supabase: Client = create_client(
 BUCKET_NAME = "ocr-images"
 
 def upload_image(file_bytes: bytes, user_id: str, job_id: str, filename: str):
-    # generate unique filename
     ext = filename.split(".")[-1]
     unique_name = f"{uuid.uuid4()}.{ext}"
 
-    # final path
     file_path = f"{user_id}/{job_id}/{unique_name}"
 
     content_type, _ = mimetypes.guess_type(filename)
 
-    # upload
-    response = supabase.storage.from_(BUCKET_NAME).upload(
-        path=file_path,
-        file=file_bytes,
-        file_options={"content-type": content_type or "application/octet-stream"}
-    )
+    try:
+        supabase.storage.from_(BUCKET_NAME).upload(
+            path=file_path,
+            file=file_bytes,
+            file_options={"content-type": content_type or "application/octet-stream"}
+        )
+    except Exception as e:
+        raise Exception(f"Upload failed: {str(e)}")  # ✅ HARD FAIL
 
-    # optional: check error
-    if hasattr(response, "error") and response.error:
-        raise Exception(f"Upload failed: {response.error}")
+    # 🔥 verify file exists (VERY IMPORTANT)
+    files = supabase.storage.from_(BUCKET_NAME).list(f"{user_id}/{job_id}")
 
-    return file_path
+    if not files:
+        raise Exception("Upload verification failed: file not found in bucket")
+
+    public_url = supabase.storage.from_(BUCKET_NAME).get_public_url(file_path)
+
+    return public_url
