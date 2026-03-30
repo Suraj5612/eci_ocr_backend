@@ -9,7 +9,6 @@ from app.core.image_processing import (
     download_image,
     crop_rois,
     save_debug_images,
-    enhance_printed,
     enhance_handwritten,
     enhance_cropped
 )
