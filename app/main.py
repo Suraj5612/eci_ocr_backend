@@ -11,6 +11,11 @@ from fastapi.exceptions import RequestValidationError
 
 from app.db.base_model import *  # important
 
+# 🔥 NEW IMPORTS
+import threading
+from app.workers.ocr_worker import worker
+
+
 app = FastAPI()
 
 # Create tables
@@ -18,6 +23,7 @@ Base.metadata.create_all(bind=engine)
 
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(ocr.router, prefix="/ocr", tags=["OCR"])
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -40,3 +46,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             }
         }
     )
+
+
+# 🔥 ADD THIS (VERY IMPORTANT)
+@app.on_event("startup")
+def start_worker():
+    print("🚀 Starting OCR worker...")
+
+    thread = threading.Thread(
+        target=worker,
+        daemon=True
+    )
+    thread.start()
