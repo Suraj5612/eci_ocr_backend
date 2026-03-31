@@ -29,5 +29,4 @@ def generate_csv(voters):
                 v.district,
                 v.state
             ])
-
     return filename
