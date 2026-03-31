@@ -1,5 +1,6 @@
 # app/api/routes/voter.py
 
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,6 +13,7 @@ from app.models.voter import Voter
 from app.schemas.voter import VoterCreate
 from app.api.deps import get_current_user
 from app.models.user import User
+from app.services.csv_service import generate_csv
 from app.services.vote_service import get_base_query
 from app.utils.success_response import success_response
 from app.utils.exceptions import AppException
@@ -188,4 +190,52 @@ def get_voter_count(
         data={
             "total_voters": total
         }
+    )
+
+from fastapi.responses import FileResponse
+from typing import Optional
+from fastapi import Query
+
+@router.get("/export")
+def export_voters(
+    name: Optional[str] = Query(None),
+    mobile: Optional[str] = Query(None),
+    epic: Optional[str] = Query(None),
+    assembly_constituency_id: Optional[int] = Query(None),
+    district_id: Optional[int] = Query(None),
+
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    query = get_base_query(db, current_user)
+
+    # -----------------------
+    # FILTERS (same as GET)
+    # -----------------------
+    if name:
+        query = query.filter(Voter.name.ilike(f"%{name}%"))
+
+    if mobile:
+        query = query.filter(Voter.mobile.ilike(f"%{mobile}%"))
+
+    if epic:
+        query = query.filter(Voter.epic.ilike(f"%{epic}%"))
+
+    if assembly_constituency_id:
+        query = query.filter(
+            Voter.assembly_constituency_id == assembly_constituency_id
+        )
+
+    if district_id:
+        query = query.filter(Voter.district_id == district_id)
+
+    voters = query.all()
+
+    # generate csv
+    file_path = generate_csv(voters)
+
+    return FileResponse(
+        path=file_path,
+        filename="voters_export.csv",
+        media_type="text/csv"
     )
