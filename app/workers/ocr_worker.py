@@ -68,7 +68,6 @@ def process_job(job: Job, db: Session):
 
         # 3. Save debug images
         print("💾 Saving debug images...")
-        save_debug_images(job.id, top_left, form_section)
         print("✅ Debug images saved")
 
         # 🔥 4. CALL SARVAM OCR

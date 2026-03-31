@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from sqlalchemy.orm import Session
 from app.models.voter import Voter
 
@@ -18,24 +20,18 @@ def create_voter(db: Session, data: dict):
 
     return voter
 
-def update_voter(db: Session, voter_id: str, data: dict):
-    if "assembly_constituency_id" not in data:
-        raise Exception("assembly_constituency_id is required")
-
+def update_voter(db: Session, voter_id: str, ac_id: int, data: dict):
     voter = (
         db.query(Voter)
         .filter(
             Voter.id == voter_id,
-            Voter.assembly_constituency_id == data["assembly_constituency_id"]
+            Voter.assembly_constituency_id == ac_id  # 🔥 partition targeting
         )
         .first()
     )
 
     if not voter:
         return None
-
-    # 🔥 prevent partition change
-    data.pop("assembly_constituency_id", None)
 
     for key, value in data.items():
         if value is not None:
@@ -46,12 +42,12 @@ def update_voter(db: Session, voter_id: str, data: dict):
 
     return voter
 
-def delete_voter(db: Session, voter_id: str, assembly_constituency_id: int):
+def delete_voter(db: Session, voter_id: UUID, ac_id: int):
     voter = (
         db.query(Voter)
         .filter(
             Voter.id == voter_id,
-            Voter.assembly_constituency_id == assembly_constituency_id
+            Voter.assembly_constituency_id == ac_id
         )
         .first()
     )
