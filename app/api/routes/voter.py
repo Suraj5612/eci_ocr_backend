@@ -12,12 +12,45 @@ from app.models.voter import Voter
 from app.schemas.voter import VoterCreate
 from app.api.deps import get_current_user
 from app.models.user import User
+from app.services.vote_service import get_base_query
 from app.utils.success_response import success_response
 from app.utils.exceptions import AppException
 from app.schemas.voter_update_request import VoterUpdateRequest
 from app.repositories.voter_repo import create_voter, delete_voter, get_total_voters, update_voter
 
 router = APIRouter()
+
+@router.get("/getVoters")
+def get_voters(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    query = get_base_query(db, current_user)
+
+    voters = query.limit(50).all()
+
+    return success_response(
+    data=[
+        {
+            "id": str(v.id),
+            "name": v.name,
+            "epic": v.epic,
+            "mobile": v.mobile,
+            "address": v.address,
+            "serial_number": v.serial_number,
+            "part_number_and_name": v.part_number_and_name,
+            "assembly_constituency_id": v.assembly_constituency_id,
+            "assembly_constituency_name": v.assembly_constituency_name,
+            "district": v.district,
+            "state": v.state,
+            "mandal_id": v.mandal_id,
+            "district_id": v.district_id,
+            "booth_id": v.booth_id,
+            "user_id": str(v.user_id)
+        }
+        for v in voters
+    ]
+)
 
 @router.post("/save")
 def create_voter_api(
