@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.constituency import Constituency
+from app.models.districts import District
 from app.models.voter import Voter
 from app.schemas.voter import VoterCreate
 from app.api.deps import get_current_user
@@ -17,17 +18,23 @@ from app.repositories.voter_repo import create_voter, delete_voter, get_total_vo
 
 router = APIRouter()
 
-
 @router.post("/save")
 def create_voter_api(
     payload: VoterCreate,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    from sqlalchemy import or_, func
+
+    name = payload.assembly_constituency_name.strip().lower()
+
     constituency = (
         db.query(Constituency)
         .filter(
-            Constituency.constituency_hindi == payload.assembly_constituency_name
+            or_(
+                func.lower(Constituency.constituency_hindi) == name,
+                func.lower(Constituency.constituency) == name
+            )
         )
         .first()
     )
@@ -39,13 +46,30 @@ def create_voter_api(
             message="Invalid assembly constituency"
         )
 
+    district = (
+        db.query(District)
+        .filter(District.district_id == constituency.district_id)
+        .first()
+    )
+
     data = payload.model_dump()
 
     data.pop("assembly_constituency_name", None)
 
     data["assembly_constituency_id"] = constituency.id
     data["assembly_constituency_name"] = constituency.constituency_hindi
+
+    data["district_id"] = constituency.district_id
+    data["mandal_id"] = district.mandala_id if district else None
+
+    data["booth_id"] = current_user.booth_id
     data["user_id"] = current_user.id
+
+    # optional (good for UI)
+    data["district"] = (
+    district.district_name_hi
+        or district.district_name_en
+    ) if district else None
 
     voter = create_voter(db, data)
 
