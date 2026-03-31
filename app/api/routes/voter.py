@@ -1,5 +1,7 @@
 # app/api/routes/voter.py
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -113,6 +115,16 @@ def delete_voter_api(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
+    # 🔥 validate UUID
+    try:
+        voter_id = UUID(voter_id)
+    except Exception:
+        raise AppException(
+            status_code=400,
+            code="INVALID_ID",
+            message="Invalid voter ID"
+        )
+
     deleted = delete_voter(
         db,
         voter_id,
@@ -128,11 +140,10 @@ def delete_voter_api(
 
     return success_response(
         data={
-            "id": voter_id,
+            "id": str(voter_id),
             "message": "Voter deleted successfully"
         }
     )
-
 @router.get("/count")
 def get_voter_count(
     db: Session = Depends(get_db),

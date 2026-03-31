@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from sqlalchemy.orm import Session
 from app.models.voter import Voter
 
@@ -40,7 +42,7 @@ def update_voter(db: Session, voter_id: str, ac_id: int, data: dict):
 
     return voter
 
-def delete_voter(db: Session, voter_id: str, ac_id: int):
+def delete_voter(db: Session, voter_id: UUID, ac_id: int):
     voter = (
         db.query(Voter)
         .filter(
