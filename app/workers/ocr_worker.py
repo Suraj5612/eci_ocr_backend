@@ -66,10 +66,6 @@ def process_job(job: Job, db: Session):
             # concat
             processed = cv2.vconcat([top_left_resized, form_section_resized])
 
-        # 3. Save debug images
-        print("💾 Saving debug images...")
-        print("✅ Debug images saved")
-
         # 🔥 4. CALL SARVAM OCR
         print("🧠 Calling Sarvam OCR...")
         ocr_text = run_sarvam(processed)
