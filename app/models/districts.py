@@ -9,3 +9,4 @@ class District(Base):
     district_id = Column(Integer, primary_key=True)
     district_name_en = Column(String)
     district_name_hi = Column(String)
+    mandala_id = Column(Integer)

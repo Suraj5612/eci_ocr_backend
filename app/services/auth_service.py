@@ -36,6 +36,41 @@ def register_user(db: Session, data):
             field="mobile"
         )
 
+    valid_roles = ["superadmin", "mandal", "district", "constituency", "booth"]
+
+    if data.role not in valid_roles:
+        raise AppException(
+            status_code=400,
+            code="INVALID_ROLE",
+            message="Invalid user role",
+            field="role"
+        )
+
+    mandal_id = None
+    district_id = None
+    constituency_id = None
+    booth_id = None
+
+    if data.role == "mandal":
+        if not data.mandal_id:
+            raise AppException(400, "MANDAL_REQUIRED", "mandal_id is required")
+        mandal_id = data.mandal_id
+
+    elif data.role == "district":
+        if not data.district_id:
+            raise AppException(400, "DISTRICT_REQUIRED", "district_id is required")
+        district_id = data.district_id
+
+    elif data.role == "constituency":
+        if not data.constituency_id:
+            raise AppException(400, "CONSTITUENCY_REQUIRED", "constituency_id is required")
+        constituency_id = data.constituency_id
+
+    elif data.role == "booth":
+        if not data.booth_id:
+            raise AppException(400, "BOOTH_REQUIRED", "booth_id is required")
+        booth_id = data.booth_id
+
     user_dict = {
         "first_name": data.firstName,
         "middle_name": data.middleName,
@@ -44,6 +79,12 @@ def register_user(db: Session, data):
         "email": data.email,
         "mobile": data.mobile,
         "hashed_password": hash_password(data.password),
+
+        "role": data.role,
+        "mandal_id": mandal_id,
+        "district_id": district_id,
+        "constituency_id": constituency_id,
+        "booth_id": booth_id,
     }
 
     return create_user(db, user_dict)

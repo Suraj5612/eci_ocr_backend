@@ -1,6 +1,6 @@
 # app/models/voter.py
 
-from sqlalchemy import Column, String, Integer, Text, ForeignKey
+from sqlalchemy import Column, PrimaryKeyConstraint, String, Integer, Text, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
@@ -27,3 +27,10 @@ class Voter(Base):
 
     district = Column(String)
     state = Column(String)
+    mandal_id = Column(Integer, nullable=True)
+    district_id = Column(Integer, nullable=True)
+    booth_id = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("id", "assembly_constituency_id"),
+    )
