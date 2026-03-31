@@ -107,30 +107,36 @@ def extract_field(patterns, text):
     return None, 0.0
 
 def extract_epic(text):
-    # strict match
-    match = re.search(r"\b[A-Z]{3}[0-9]{6,7}\b", text)
+    match = re.search(r"\b[A-Z]{2}/\d{2}/\d{3}/\d{6,7}\b", text)
     if match:
         return match.group(), 0.98
 
-    match = re.search(r"[A-Z0-9]{3}\s?[0-9]{6,7}", text)
+    match = re.search(r"\b[A-Z]{3}\d{7}\b", text)
+    if match:
+        return match.group(), 0.95
+
+    match = re.search(r"\b[A-Z]{3}\s?\d{6,7}\b", text)
     if match:
         value = match.group().replace(" ", "")
-        return value, 0.8
+        return value, 0.85
 
     return None, 0.0
 
 def extract_mobile(text):
-    cleaned = re.sub(r"[^\d]", " ", text)
+    match = re.search(
+        r"मोबाइल\s*नंबर[\s:]*([6-9]\d{9})",
+        text
+    )
+    if match:
+        return match.group(1), 0.98
 
-    # join digit chunks
-    cleaned = re.sub(r"\s+", "", cleaned)
-
-    matches = re.findall(r"[6-9]\d{9}", cleaned)
+    # fallback (less confidence)
+    matches = re.findall(r"[6-9]\d{9}", text)
 
     if not matches:
         return None, 0.0
 
-    return matches[0], 0.95 if len(matches) == 1 else 0.75
+    return matches[0], 0.6
 
 def extract_name(text):
     match = re.search(
@@ -160,17 +166,23 @@ def extract_serial(text):
     return None, 0.0
 
 def extract_part_number_and_name(text):
-
     patterns = [
-        r"(?:भाग संख्या एवं नाम|नाम संख्या एवं नाम|गण संख्या एवं नाम|Part Number and Name)[\s:]*([^\n<]+)"
+        r"(?:भाग संख्या[:\s]*एवं नाम|नाम संख्या[:\s]*एवं नाम|गण संख्या[:\s]*एवं नाम)[\s:]*([^\n]+)"
     ]
 
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            value = match.group(1).strip()
-            value = re.sub(r"\s+", " ", value)
-            value = value.split(",")[0]
+            value = match.group(1)
+
+            value = re.split(
+                r"(विधानसभा|राज्य का नाम|जन्मतिथि|आधार संख्या|पिता|माता)",
+                value
+            )[0]
+
+            value = re.sub(r"<br\s*/?>", " ", value)
+
+            value = re.sub(r"\s+", " ", value).strip()
 
             return value, 0.95
 
@@ -199,41 +211,18 @@ def extract_state(text):
 
 def extract_constituency_from_label(text):
     match = re.search(
-        r"(?:विधानसभा.*?नाम|संसदीय निर्वाचन क्षेत्र का नाम)[\s:]*([^\n]+)",
+        r"(?:विधानसभा.*?नाम|संसदीय निर्वाचन क्षेत्र का नाम)[\s:]*([\s\S]{0,100})",
         text
     )
-
     if match:
         value = match.group(1)
-
-        # handle <br>
         value = re.sub(r"<br\s*/?>", " ", value)
-
+        value = re.split(
+            r"(राज्य का नाम|क्रम संख्या|भाग संख्या|जन्मतिथि)",
+            value
+        )[0]
         value = re.sub(r"\s+", " ", value).strip()
-
         return value, 0.95
-
-    return None, 0.0
-
-def extract_constituency_db(text, db):
-    from app.models.constituency import Constituency
-    from rapidfuzz import fuzz
-
-    constituencies = db.query(Constituency).all()
-
-    best_match = None
-    best_score = 0
-
-    for c in constituencies:
-        score = fuzz.partial_ratio(c.constituency_hindi, text)
-
-        if score > best_score:
-            best_score = score
-            best_match = c
-
-    if best_score > 85:
-        return best_match, best_score / 100
-
     return None, 0.0
 
 def get_district_from_constituency(c_obj, db):
@@ -256,23 +245,61 @@ def match_constituency(text_value, db):
     if not text_value:
         return None, 0.0
 
+    text_value = text_value.strip()
+
     constituencies = db.query(Constituency).all()
+
+    for c in constituencies:
+        if c.constituency_hindi == text_value:
+            return c, 1.0
+
+    for c in constituencies:
+        if text_value in c.constituency_hindi or c.constituency_hindi in text_value:
+            return c, 0.95
 
     best = None
     best_score = 0
 
     for c in constituencies:
-        score = fuzz.partial_ratio(c.constituency_hindi, text_value)
+        score = fuzz.token_set_ratio(c.constituency_hindi, text_value)
+
+        if c.constituency_hindi.split()[0] == text_value.split()[0]:
+            score -= 10
 
         if score > best_score:
             best_score = score
             best = c
 
-    if best_score > 85:
+    if best_score > 80:
         return best, best_score / 100
 
-    if not text_value:
+    return None, 0.0
+
+def extract_district_from_address(address, db):
+    if not address:
         return None, 0.0
+
+    districts = db.query(District).all()
+
+    best_match = None
+    best_score = 0
+
+    for d in districts:
+        # check both hindi + english
+        for name in [d.district_name_hi, d.district_name_en]:
+            if not name:
+                continue
+
+            score = fuzz.partial_ratio(name, address)
+
+            if score > best_score:
+                best_score = score
+                best_match = d
+
+    if best_score > 80:
+        return best_match.district_name_hi, best_score / 100
+
+    return None, 0.0
 
 def extract_address(text):
     match = re.search(
@@ -283,9 +310,15 @@ def extract_address(text):
     if match:
         value = match.group(1)
 
-        value = re.split(r"(क्रम संख्या|गण संख्या|भाग संख्या|विधानसभा)", value)[0]
+        value = re.split(
+            r"(क्रम संख्या|भाग संख्या|विधानसभा|राज्य का नाम)",
+            value
+        )[0]
 
-        return value.strip(), 0.9
+        value = re.sub(r"<br\s*/?>", " ", value)
+        value = re.sub(r"\s+", " ", value).strip()
+
+        return value, 0.9
 
     return None, 0.0
 
@@ -296,75 +329,74 @@ def format_field(value, confidence):
     }
 
 def parse_ocr_text(text, db):
-    text = clean_text(text)
-    name_value, _ = extract_name(text)
-    epic_value, _ = extract_epic(text)
-    mobile_value, _ = extract_mobile(text)
-    serial_value, _ = extract_serial(text)
-    part_value, part_conf = extract_part_number_and_name(text)
-    state_value, _ = extract_state(text)
-    address_value, _ = extract_address(text)
+    try:
+        text = clean_text(text)
 
-    constituency_text, _ = extract_constituency_from_label(text)
-    constituency_obj, c_conf = match_constituency(constituency_text, db)
+        name_value, _ = extract_name(text)
+        epic_value, _ = extract_epic(text)
+        mobile_value, _ = extract_mobile(text)
+        serial_value, _ = extract_serial(text)
+        part_value, part_conf = extract_part_number_and_name(text)
+        state_value, _ = extract_state(text)
+        address_value, _ = extract_address(text)
+        constituency_text, c_conf = extract_constituency_from_label(text)
+        #constituency_text, _ = extract_constituency_from_label(text)
+        constituency_obj, c_conf = match_constituency(constituency_text, db)
+        
 
-    district_value, d_conf = get_district_from_constituency(
-        constituency_obj, db
-    )
-
-    return {
-        "name": format_field(
-            name_value,
-            score_name(name_value)
-        ),
-
-        "epic": format_field(
-            epic_value,
-            score_epic(epic_value, text)
-        ),
-
-        "mobile": format_field(
-            mobile_value,
-            score_mobile(mobile_value)
-        ),
-
-        "serial_number": format_field(
-            serial_value,
-            0.97 if serial_value else 0.0
-        ),
-
-        "part_number_and_name": format_field(
-            part_value,
-            max(part_conf, score_part(part_value))
-        ),
-
-        "state": format_field(
-            state_value,
-            score_state(state_value)
-        ),
-
-        "address": format_field(
-            address_value,
-            score_address(address_value)
-        ),
-
-        "assembly_constituency": format_field(
-            constituency_obj.constituency_hindi if constituency_obj else None,
-            score_ac(
-                constituency_obj.constituency_hindi if constituency_obj else None,
-                bool(constituency_obj)
-            )
-        ),
-
-        "district": format_field(
-            district_value,
-            score_district(district_value, bool(constituency_obj))
+        district_value, d_conf = get_district_from_constituency(
+            constituency_obj, db
         )
-    }
+        
+        if not district_value:
+            district_value, d_conf = extract_district_from_address(address_value, db)
 
+        return {
+            "name": format_field(
+                name_value,
+                score_name(name_value)
+            ),
 
-def format_field(value, confidence):
-    return {
-        "value": value,
-        "confidence": confidence
-    }
+            "epic": format_field(
+                epic_value,
+                score_epic(epic_value, text)
+            ),
+
+            "mobile": format_field(
+                mobile_value,
+                score_mobile(mobile_value)
+            ),
+
+            "serial_number": format_field(
+                serial_value,
+                0.97 if serial_value else 0.0
+            ),
+
+            "part_number_and_name": format_field(
+                part_value,
+                max(part_conf, score_part(part_value))
+            ),
+
+            "state": format_field(
+                state_value,
+                score_state(state_value)
+            ),
+
+            "address": format_field(
+                address_value,
+                score_address(address_value)
+            ),
+
+            "assembly_constituency": format_field(
+                constituency_text,
+                score_ac(constituency_text, bool(constituency_text))
+            ),
+
+            "district": format_field(
+                district_value,
+                score_district(district_value, bool(constituency_obj))
+            )
+        }
+    except Exception as e:
+        print("❌ Parser crash:", str(e))
+        return {}
