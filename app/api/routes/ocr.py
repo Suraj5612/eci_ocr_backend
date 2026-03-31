@@ -80,13 +80,6 @@ def get_ocr_result(
             message="Job not found"
         )
 
-    if job.user_id != current_user.id:
-        raise AppException(
-            status_code=403,
-            code="FORBIDDEN",
-            message="You do not have access to this job"
-        )
-
     if job.status in ["pending", "processing"]:
         return {
             "job_id": job.id,
