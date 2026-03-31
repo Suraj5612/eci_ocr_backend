@@ -10,7 +10,6 @@ from app.models.voter import Voter
 from app.schemas.voter import VoterCreate
 from app.api.deps import get_current_user
 from app.models.user import User
-from app.schemas.voter_delete_request import VoterDeleteRequest
 from app.utils.success_response import success_response
 from app.utils.exceptions import AppException
 from app.schemas.voter_update_request import VoterUpdateRequest
@@ -83,11 +82,15 @@ def create_voter_api(
 @router.put("/{voter_id}")
 def update_voter_api(
     voter_id: str,
+    ac_id: int,
     payload: VoterUpdateRequest,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    voter = update_voter(db, voter_id, payload.model_dump())
+    data = payload.model_dump(exclude_unset=True)
+    data.pop("assembly_constituency_name", None)
+
+    voter = update_voter(db, voter_id, ac_id, data)
 
     if not voter:
         raise AppException(
@@ -106,14 +109,14 @@ def update_voter_api(
 @router.delete("/{voter_id}")
 def delete_voter_api(
     voter_id: str,
-    payload: VoterDeleteRequest,
+    ac_id: int,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
     deleted = delete_voter(
         db,
         voter_id,
-        payload.assembly_constituency_id
+        ac_id
     )
 
     if not deleted:

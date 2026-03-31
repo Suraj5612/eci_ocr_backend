@@ -7,7 +7,5 @@ class VoterUpdateRequest(BaseModel):
     address: str | None = None
     serial_number: int | None = None
     part_number_and_name: str | None = None
-    assembly_constituency_name: str
-    assembly_constituency_id: int
     district: str | None = None
     state: str | None = None
