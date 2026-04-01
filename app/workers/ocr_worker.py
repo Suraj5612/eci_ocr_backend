@@ -43,7 +43,7 @@ def process_job(job: Job, db: Session):
         else:
             print("🟡 Not cropped → ROI processing")
 
-            #top_left, form_section = crop_rois(image)
+            top_left, form_section = crop_rois(image)
 
             # printed
             #top_left = enhance_cropped(top_left)
@@ -52,10 +52,10 @@ def process_job(job: Job, db: Session):
             #form_section = enhance_handwritten(form_section)
 
             # ensure same width
-            #w = max(top_left.shape[1], form_section.shape[1])
+            w = max(top_left.shape[1], form_section.shape[1])
 
-            #top_left_resized = cv2.resize(top_left, (w, top_left.shape[0]))
-            #form_section_resized = cv2.resize(form_section, (w, form_section.shape[0]))
+            top_left_resized = cv2.resize(top_left, (w, top_left.shape[0]))
+            form_section_resized = cv2.resize(form_section, (w, form_section.shape[0]))
 
             # ensure same type (grayscale)
             #if len(top_left_resized.shape) == 2:
@@ -65,8 +65,8 @@ def process_job(job: Job, db: Session):
                 #form_section_resized = cv2.cvtColor(form_section_resized, cv2.COLOR_GRAY2BGR)
 
             # concat
-            #processed = cv2.vconcat([top_left_resized, form_section_resized])
-            processed = image
+            processed = cv2.vconcat([top_left_resized, form_section_resized])
+            #processed = image
 
         # 🔥 4. CALL SARVAM OCR
         print("🧠 Calling Sarvam OCR...")
