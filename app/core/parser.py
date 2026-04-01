@@ -107,18 +107,39 @@ def extract_field(patterns, text):
     return None, 0.0
 
 def extract_epic(text):
-    match = re.search(r"\b[A-Z]{2}/\d{2}/\d{3}/\d{6,7}\b", text)
-    if match:
-        return match.group(), 0.98
+    split_text = re.split(r"पता[:\s]", text)
+    safe_text = split_text[0] if split_text else text
 
-    match = re.search(r"\b[A-Z]{3}\d{7}\b", text)
-    if match:
-        return match.group(), 0.95
+    match = re.search(
+        r"(?:ईपीआईसी|EPIC|ईपीआईसीआई)[:\s]*([A-Z0-9\/\s]{8,25})",
+        safe_text
+    )
 
-    match = re.search(r"\b[A-Z]{3}\s?\d{6,7}\b", text)
     if match:
-        value = match.group().replace(" ", "")
-        return value, 0.85
+        value = match.group(1)
+        value = value.replace(" ", "").strip()
+
+        if (
+            re.match(r"^[A-Z]{2}/\d{2}/\d{3}/\d{6,7}$", value) or
+            re.match(r"^[A-Z]{3}\d{7}$", value) or
+            re.match(r"^[A-Z]{2}/\d{7}$", value) or
+            re.match(r"^[A-Z]\d{8}$", value) or
+            re.match(r"^[A-Z]{2}\d{8}$", value)
+        ):
+            return value, 0.99
+
+    patterns = [
+        r"\b[A-Z]{2}/\d{2}/\d{3}/\d{6,7}\b",
+        r"\b[A-Z]{3}\d{7}\b",
+        r"\b[A-Z]{2}/\d{7}\b",
+        r"\b[A-Z]\d{8}\b",
+        r"\b[A-Z]{2}\d{8}\b",
+    ]
+
+    for p in patterns:
+        matches = re.findall(p, safe_text)
+        if matches:
+            return matches[0], 0.9
 
     return None, 0.0
 
@@ -160,9 +181,9 @@ def extract_name(text):
     return None, 0.0
 
 def extract_serial(text):
-    match = re.search(r"क्रम संख्या[:\s]+(\d+)", text)
+    match = re.search(r"(क्रम|कण|कम|जन्म)\s*संख्या[:\s]+(\d+)", text)
     if match:
-        return match.group(1), 0.97
+        return match.group(2), 0.97
     return None, 0.0
 
 def extract_part_number_and_name(text):
