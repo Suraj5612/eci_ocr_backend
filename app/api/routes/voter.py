@@ -27,32 +27,43 @@ def get_voters(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    query = get_base_query(db, current_user)
+    try:
+        query = get_base_query(db, current_user)
 
-    voters = query.limit(50).all()
+        voters = query.limit(50).all()
 
-    return success_response(
-    data=[
-        {
-            "id": str(v.id),
-            "name": v.name,
-            "epic": v.epic,
-            "mobile": v.mobile,
-            "address": v.address,
-            "serial_number": v.serial_number,
-            "part_number_and_name": v.part_number_and_name,
-            "assembly_constituency_id": v.assembly_constituency_id,
-            "assembly_constituency_name": v.assembly_constituency_name,
-            "district": v.district,
-            "state": v.state,
-            "mandal_id": v.mandal_id,
-            "district_id": v.district_id,
-            "booth_id": v.booth_id,
-            "user_id": str(v.user_id)
-        }
-        for v in voters
-    ]
-)
+        return success_response(
+            data=[
+                {
+                    "id": str(v.id),
+                    "name": v.name,
+                    "epic": v.epic,
+                    "mobile": v.mobile,
+                    "address": v.address,
+                    "serial_number": v.serial_number,
+                    "part_number_and_name": v.part_number_and_name,
+                    "assembly_constituency_id": v.assembly_constituency_id,
+                    "assembly_constituency_name": v.assembly_constituency_name,
+                    "district": v.district,
+                    "state": v.state,
+                    "mandal_id": v.mandal_id,
+                    "district_id": v.district_id,
+                    "booth_id": v.booth_id,
+                    "user_id": str(v.user_id)
+                }
+                for v in voters
+            ]
+        )
+
+    except AppException:
+        raise
+
+    except Exception:
+        raise AppException(
+            status_code=500,
+            code="INTERNAL_SERVER_ERROR",
+            message="Something went wrong while fetching voters"
+        )
 
 @router.post("/save")
 def create_voter_api(
@@ -62,59 +73,95 @@ def create_voter_api(
 ):
     from sqlalchemy import or_, func
 
-    name = payload.assembly_constituency_name.strip().lower()
-
-    constituency = (
-        db.query(Constituency)
-        .filter(
-            or_(
-                func.lower(Constituency.constituency_hindi) == name,
-                func.lower(Constituency.constituency) == name
+    try:
+        if not payload.assembly_constituency_name:
+            raise AppException(
+                status_code=400,
+                code="INVALID_INPUT",
+                message="Assembly constituency name is required",
+                field="assembly_constituency_name"
             )
-        )
-        .first()
-    )
 
-    if not constituency:
+        name = payload.assembly_constituency_name.strip().lower()
+
+        constituency = (
+            db.query(Constituency)
+            .filter(
+                or_(
+                    func.lower(Constituency.constituency_hindi) == name,
+                    func.lower(Constituency.constituency) == name
+                )
+            )
+            .first()
+        )
+
+        if not constituency:
+            raise AppException(
+                status_code=400,
+                code="INVALID_CONSTITUENCY",
+                message="Invalid assembly constituency",
+                field="assembly_constituency_name"
+            )
+
+        if payload.epic:
+            existing = (
+                db.query(Voter)
+                .filter(
+                    Voter.epic == payload.epic,
+                    Voter.assembly_constituency_id == constituency.id
+                )
+                .first()
+            )
+
+            if existing:
+                raise AppException(
+                    status_code=400,
+                    code="EPIC_ALREADY_EXISTS",
+                    message="Voter with this EPIC already exists",
+                    field="epic"
+                )
+
+        district = (
+            db.query(District)
+            .filter(District.district_id == constituency.district_id)
+            .first()
+        )
+
+        data = payload.model_dump()
+
+        data.pop("assembly_constituency_name", None)
+
+        data["assembly_constituency_id"] = constituency.id
+        data["assembly_constituency_name"] = constituency.constituency_hindi
+
+        data["district_id"] = constituency.district_id
+        data["mandal_id"] = district.mandala_id if district else None
+
+        data["booth_id"] = current_user.booth_id
+        data["user_id"] = current_user.id
+
+        data["district"] = (
+            district.district_name_hi or district.district_name_en
+        ) if district else None
+
+        voter = create_voter(db, data)
+
+        return success_response(
+            data={
+                "id": voter.id,
+                "message": "Voter saved successfully"
+            }
+        )
+
+    except AppException:
+        raise
+
+    except Exception as e:
         raise AppException(
-            status_code=400,
-            code="INVALID_CONSTITUENCY",
-            message="Invalid assembly constituency"
+            status_code=500,
+            code="INTERNAL_SERVER_ERROR",
+            message=str(e)
         )
-
-    district = (
-        db.query(District)
-        .filter(District.district_id == constituency.district_id)
-        .first()
-    )
-
-    data = payload.model_dump()
-
-    data.pop("assembly_constituency_name", None)
-
-    data["assembly_constituency_id"] = constituency.id
-    data["assembly_constituency_name"] = constituency.constituency_hindi
-
-    data["district_id"] = constituency.district_id
-    data["mandal_id"] = district.mandala_id if district else None
-
-    data["booth_id"] = current_user.booth_id
-    data["user_id"] = current_user.id
-
-    # optional (good for UI)
-    data["district"] = (
-    district.district_name_hi
-        or district.district_name_en
-    ) if district else None
-
-    voter = create_voter(db, data)
-
-    return success_response(
-        data={
-            "id": voter.id,
-            "message": "Voter saved successfully"
-        }
-    )
     
 @router.put("/{voter_id}")
 def update_voter_api(
@@ -124,24 +171,36 @@ def update_voter_api(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    data = payload.model_dump(exclude_unset=True)
-    data.pop("assembly_constituency_name", None)
+    try:
+        data = payload.model_dump(exclude_unset=True)
+        data.pop("assembly_constituency_name", None)
 
-    voter = update_voter(db, voter_id, ac_id, data)
+        voter = update_voter(db, voter_id, ac_id, data)
 
-    if not voter:
-        raise AppException(
-            status_code=404,
-            code="VOTER_NOT_FOUND",
-            message="Voter not found"
+        if not voter:
+            raise AppException(
+                status_code=404,
+                code="VOTER_NOT_FOUND",
+                message="Voter not found",
+                field="voter_id"
+            )
+
+        return success_response(
+            data={
+                "id": voter.id,
+                "message": "Voter updated successfully"
+            }
         )
 
-    return success_response(
-        data={
-            "id": voter.id,
-            "message": "Voter updated successfully"
-        }
-    )
+    except AppException:
+        raise
+
+    except Exception:
+        raise AppException(
+            status_code=500,
+            code="INTERNAL_SERVER_ERROR",
+            message="Something went wrong while updating voter"
+        )
 
 @router.delete("/{voter_id}")
 def delete_voter_api(
