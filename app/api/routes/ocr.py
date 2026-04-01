@@ -65,6 +65,10 @@ async def upload_image(
         "isCropped": job.is_cropped
     }
 
+import os
+import json
+from datetime import datetime
+
 @router.get("/result/{job_id}")
 def get_ocr_result(
     job_id: str,
@@ -90,7 +94,7 @@ def get_ocr_result(
         return {
             "job_id": job.id,
             "status": "failed",
-            "error": job.error_message
+            "error": job.error
         }
 
     return {

@@ -107,18 +107,39 @@ def extract_field(patterns, text):
     return None, 0.0
 
 def extract_epic(text):
-    match = re.search(r"\b[A-Z]{2}/\d{2}/\d{3}/\d{6,7}\b", text)
-    if match:
-        return match.group(), 0.98
+    split_text = re.split(r"पता[:\s]", text)
+    safe_text = split_text[0] if split_text else text
 
-    match = re.search(r"\b[A-Z]{3}\d{7}\b", text)
-    if match:
-        return match.group(), 0.95
+    match = re.search(
+        r"(?:ईपीआईसी|EPIC|ईपीआईसीआई)[:\s]*([A-Z0-9\/\s]{8,25})",
+        safe_text
+    )
 
-    match = re.search(r"\b[A-Z]{3}\s?\d{6,7}\b", text)
     if match:
-        value = match.group().replace(" ", "")
-        return value, 0.85
+        value = match.group(1)
+        value = value.replace(" ", "").strip()
+
+        if (
+            re.match(r"^[A-Z]{2}/\d{2}/\d{3}/\d{6,7}$", value) or
+            re.match(r"^[A-Z]{3}\d{7}$", value) or
+            re.match(r"^[A-Z]{2}/\d{7}$", value) or
+            re.match(r"^[A-Z]\d{8}$", value) or
+            re.match(r"^[A-Z]{2}\d{8}$", value)   # 🔥 NEW FIX
+        ):
+            return value, 0.99
+
+    patterns = [
+        r"\b[A-Z]{2}/\d{2}/\d{3}/\d{6,7}\b",
+        r"\b[A-Z]{3}\d{7}\b",
+        r"\b[A-Z]{2}/\d{7}\b",
+        r"\b[A-Z]\d{8}\b",
+        r"\b[A-Z]{2}\d{8}\b",
+    ]
+
+    for p in patterns:
+        matches = re.findall(p, safe_text)
+        if matches:
+            return matches[0], 0.9
 
     return None, 0.0
 
@@ -130,7 +151,6 @@ def extract_mobile(text):
     if match:
         return match.group(1), 0.98
 
-    # fallback (less confidence)
     matches = re.findall(r"[6-9]\d{9}", text)
 
     if not matches:
@@ -139,20 +159,14 @@ def extract_mobile(text):
     return matches[0], 0.6
 
 def extract_name(text):
-    match = re.search(
-        r"निर्वाचक का नाम[:\s]*([^\n<]+)",
-        text
-    )
+    match = re.search(r"निर्वाचक का नाम[:\s]*([^\n<]+)", text)
 
     if match:
         value = match.group(1)
 
-        # 🔥 remove trailing garbage
+        value = re.sub(r"^नाम[:\s]*", "", value)  # 🔥 ADD THIS
+
         value = re.split(r"(ईपीआईसी|EPIC|पता|क्रम)", value)[0]
-
-        value = value.strip()
-
-        # safety: remove numbers
         value = re.sub(r"[0-9]", "", value).strip()
 
         return value, 0.95
@@ -160,31 +174,27 @@ def extract_name(text):
     return None, 0.0
 
 def extract_serial(text):
-    match = re.search(r"क्रम संख्या[:\s]+(\d+)", text)
+    match = re.search(r"(क्रम|कण|कम|जन्म)\s*संख्या[:\s]+(\d+)", text)
     if match:
-        return match.group(1), 0.97
+        return match.group(2), 0.97
     return None, 0.0
 
 def extract_part_number_and_name(text):
-    patterns = [
-        r"(?:भाग संख्या[:\s]*एवं नाम|नाम संख्या[:\s]*एवं नाम|गण संख्या[:\s]*एवं नाम)[\s:]*([^\n]+)"
-    ]
+    match = re.search(
+        r"(?:भाग|मान|पाण|नाम)\s*संख्या\s*एवं\s*(?:नाम|भाग)?[:\s]*([\s\S]*?)(?=विधानसभा|क्रम\s*संख्या|\[\^|जन्मतिथि|आधार|पिता|माता|$)",
+        text,
+        re.DOTALL
+    )
 
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            value = match.group(1)
+    if match:
+        value = match.group(1)
+        value = re.sub(r"<br\s*/?>", " ", value)
+        value = re.sub(r"\s+", " ", value).strip()
+        value = re.sub(r"^[^\w\u0900-\u097F]+", "", value)
+        if len(value) < 10:
+            return None, 0.0
 
-            value = re.split(
-                r"(विधानसभा|राज्य का नाम|जन्मतिथि|आधार संख्या|पिता|माता)",
-                value
-            )[0]
-
-            value = re.sub(r"<br\s*/?>", " ", value)
-
-            value = re.sub(r"\s+", " ", value).strip()
-
-            return value, 0.95
+        return value, 0.95
 
     return None, 0.0
 
@@ -196,7 +206,7 @@ def extract_state(text):
 
     if match:
         value = match.group(1).strip()
-
+        value = value.replace("राज्य का", "").strip()
         words = value.split()
         value = " ".join(words[:2])
 
@@ -303,21 +313,14 @@ def extract_district_from_address(address, db):
 
 def extract_address(text):
     match = re.search(
-        r"(?:पता|माता)[:\s]*([^\n]+)",
-        text
+        r"पता[:\s]*(.*?)\s*(क्रम|कण|कम|जन्म)\s*संख्या",
+        text,
+        re.DOTALL
     )
 
     if match:
         value = match.group(1)
-
-        value = re.split(
-            r"(क्रम संख्या|भाग संख्या|विधानसभा|राज्य का नाम)",
-            value
-        )[0]
-
-        value = re.sub(r"<br\s*/?>", " ", value)
         value = re.sub(r"\s+", " ", value).strip()
-
         return value, 0.9
 
     return None, 0.0
@@ -328,10 +331,18 @@ def format_field(value, confidence):
         "confidence": round(confidence, 2) if value else 0.0
     }
 
+def clean_constituency(text):
+    if not text:
+        return None
+
+    text = text.replace(".", "").strip()
+    text = re.sub(r"\s+", " ", text)
+
+    return text
+
 def parse_ocr_text(text, db):
     try:
         text = clean_text(text)
-
         name_value, _ = extract_name(text)
         epic_value, _ = extract_epic(text)
         mobile_value, _ = extract_mobile(text)
@@ -339,17 +350,30 @@ def parse_ocr_text(text, db):
         part_value, part_conf = extract_part_number_and_name(text)
         state_value, _ = extract_state(text)
         address_value, _ = extract_address(text)
-        constituency_text, c_conf = extract_constituency_from_label(text)
-        #constituency_text, _ = extract_constituency_from_label(text)
-        constituency_obj, c_conf = match_constituency(constituency_text, db)
-        
+        constituency_text, _ = extract_constituency_from_label(text)
 
-        district_value, d_conf = get_district_from_constituency(
-            constituency_obj, db
-        )
-        
-        if not district_value:
-            district_value, d_conf = extract_district_from_address(address_value, db)
+        final_constituency = constituency_text.strip() if constituency_text else None
+
+        constituency_obj = None
+        if final_constituency:
+            temp_obj, score = match_constituency(final_constituency, db)
+
+            if temp_obj and score > 0.85:
+                constituency_obj = temp_obj
+                final_constituency = temp_obj.constituency_hindi
+
+        district_value = None
+        d_conf = 0.0
+
+        if constituency_obj:
+            district_value, d_conf = get_district_from_constituency(
+                constituency_obj, db
+            )
+
+        if not district_value and address_value:
+            district_value, d_conf = extract_district_from_address(
+                address_value, db
+            )
 
         return {
             "name": format_field(
@@ -388,8 +412,8 @@ def parse_ocr_text(text, db):
             ),
 
             "assembly_constituency": format_field(
-                constituency_text,
-                score_ac(constituency_text, bool(constituency_text))
+                final_constituency,
+                score_ac(final_constituency, True if final_constituency else False)
             ),
 
             "district": format_field(
@@ -397,6 +421,7 @@ def parse_ocr_text(text, db):
                 score_district(district_value, bool(constituency_obj))
             )
         }
+
     except Exception as e:
         print("❌ Parser crash:", str(e))
         return {}
