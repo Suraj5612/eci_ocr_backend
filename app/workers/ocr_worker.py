@@ -1,6 +1,7 @@
 import time
 import cv2
 from sqlalchemy.orm import Session
+from app.core.claude_parser import parse_with_claude
 from app.db.session import SessionLocal
 from app.models.job import Job
 from app.db.base_model import * 
@@ -74,10 +75,24 @@ def process_job(job: Job, db: Session):
 
         print("📄 OCR Text received")
 
-        # 5. Save result
-        job.status = "completed"
-        parsed = parse_ocr_text(ocr_text, db)
+        # 5. Parse OCR text — Claude first, regex fallback
+        parsed = parse_with_claude(ocr_text)
 
+        if parsed and parsed.get("name"):
+            print("✅ Claude parser succeeded")
+            # Normalize to {value, confidence} shape to match regex parser output
+            parsed = {
+                k: {"value": v, "confidence": 0.95 if v else 0.0}
+                for k, v in parsed.items()
+            }
+        else:
+            print("⚠️ Claude parser failed or missing name")
+            parsed = {}
+            # fallback to regex (disabled for now)
+            # parsed = parse_ocr_text(ocr_text, db)
+
+        # 6. Save result
+        job.status = "completed"
         job.result = {
             "raw_text": ocr_text,
             "parsed": parsed
