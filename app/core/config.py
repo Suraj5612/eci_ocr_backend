@@ -12,5 +12,6 @@ class Settings:
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     SARVAM_BASE_URL: str = os.getenv("SARVAM_BASE_URL")
     SARVAM_API_KEY: str = os.getenv("SARVAM_API_KEY")
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY")
 
 settings = Settings()

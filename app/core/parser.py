@@ -107,39 +107,16 @@ def extract_field(patterns, text):
     return None, 0.0
 
 def extract_epic(text):
-    split_text = re.split(r"पता[:\s]", text)
-    safe_text = split_text[0] if split_text else text
-
-    match = re.search(
-        r"(?:ईपीआईसी|EPIC|ईपीआईसीआई)[:\s]*([A-Z0-9\/\s]{8,25})",
-        safe_text
-    )
-
-    if match:
-        value = match.group(1)
-        value = value.replace(" ", "").strip()
-
-        if (
-            re.match(r"^[A-Z]{2}/\d{2}/\d{3}/\d{6,7}$", value) or
-            re.match(r"^[A-Z]{3}\d{7}$", value) or
-            re.match(r"^[A-Z]{2}/\d{7}$", value) or
-            re.match(r"^[A-Z]\d{8}$", value) or
-            re.match(r"^[A-Z]{2}\d{8}$", value)   # 🔥 NEW FIX
-        ):
-            return value, 0.99
-
     patterns = [
-        r"\b[A-Z]{2}/\d{2}/\d{3}/\d{6,7}\b",
-        r"\b[A-Z]{3}\d{7}\b",
-        r"\b[A-Z]{2}/\d{7}\b",
-        r"\b[A-Z]\d{8}\b",
-        r"\b[A-Z]{2}\d{8}\b",
+        r'(?:EPIC|ईपीआईसी)\s*(?:No\.?|संख्या)?[:\s]*([A-Z]{3}\d{7})',
+        r'\b([A-Z]{3}\d{7})\b',
+        r'EPIC[:\s]*([A-Z0-9]{10})',
     ]
 
-    for p in patterns:
-        matches = re.findall(p, safe_text)
-        if matches:
-            return matches[0], 0.9
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match and match.group(1).strip():
+            return match.group(1).strip().upper(), 0.95
 
     return None, 0.0
 
@@ -159,17 +136,18 @@ def extract_mobile(text):
     return matches[0], 0.6
 
 def extract_name(text):
-    match = re.search(r"निर्वाचक का नाम[:\s]*([^\n<]+)", text)
+    patterns = [
+        r'निर्वाचक\s*का\s*नाम[:\s]*(.+?)(?:\n|$)',
+        r"(?:Elector'?s?\s*Name|Name)[:\s]*(.+?)(?:\n|EPIC|$)",
+        r'Name\s*:\s*(.+?)(?:\n|$)',
+    ]
 
-    if match:
-        value = match.group(1)
-
-        value = re.sub(r"^नाम[:\s]*", "", value)  # 🔥 ADD THIS
-
-        value = re.split(r"(ईपीआईसी|EPIC|पता|क्रम)", value)[0]
-        value = re.sub(r"[0-9]", "", value).strip()
-
-        return value, 0.95
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match and match.group(1).strip():
+            value = match.group(1)
+            value = re.sub(r'\s+', ' ', value).strip()
+            return value, 0.95
 
     return None, 0.0
 
@@ -180,21 +158,18 @@ def extract_serial(text):
     return None, 0.0
 
 def extract_part_number_and_name(text):
-    match = re.search(
-        r"(?:भाग|मान|पाण|नाम)\s*संख्या\s*एवं\s*(?:नाम|भाग)?[:\s]*([\s\S]*?)(?=विधानसभा|क्रम\s*संख्या|\[\^|जन्मतिथि|आधार|पिता|माता|$)",
-        text,
-        re.DOTALL
-    )
+    patterns = [
+        r'(?:भाग\s*संख्या|Part\s*No\.?)[:\s]*(.+?)(?:\n|निर्वाचन|Assembly|$)',
+        r'Part\s*No\.?\s*(?:and|&|एवं)\s*Name[:\s]*(.+?)(?:\n|Assembly|$)',
+    ]
 
-    if match:
-        value = match.group(1)
-        value = re.sub(r"<br\s*/?>", " ", value)
-        value = re.sub(r"\s+", " ", value).strip()
-        value = re.sub(r"^[^\w\u0900-\u097F]+", "", value)
-        if len(value) < 10:
-            return None, 0.0
-
-        return value, 0.95
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if match and match.group(1).strip():
+            value = match.group(1)
+            value = re.sub(r'<br\s*/?>', ' ', value)
+            value = re.sub(r'\s+', ' ', value).strip()
+            return value, 0.95
 
     return None, 0.0
 
@@ -220,19 +195,20 @@ def extract_state(text):
     return None, 0.0
 
 def extract_constituency_from_label(text):
-    match = re.search(
-        r"(?:विधानसभा.*?नाम|संसदीय निर्वाचन क्षेत्र का नाम)[\s:]*([\s\S]{0,100})",
-        text
-    )
-    if match:
-        value = match.group(1)
-        value = re.sub(r"<br\s*/?>", " ", value)
-        value = re.split(
-            r"(राज्य का नाम|क्रम संख्या|भाग संख्या|जन्मतिथि)",
-            value
-        )[0]
-        value = re.sub(r"\s+", " ", value).strip()
-        return value, 0.95
+    patterns = [
+        r'(?:निर्वाचन\s*क्षेत्र|Assembly\s*Constituency|विधानसभा)[:\s]*(.+?)(?:\n|राज्य|State|$)',
+        r'(?:Assembly|Constituency)[:\s]*(.+?)(?:\n|State|$)',
+        r'(?:लोकसभा|Lok\s*Sabha)[:\s]*(.+?)(?:\n|$)',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if match and match.group(1).strip():
+            value = match.group(1)
+            value = re.sub(r'<br\s*/?>', ' ', value)
+            value = re.sub(r'\s+', ' ', value).strip()
+            return value, 0.95
+
     return None, 0.0
 
 def get_district_from_constituency(c_obj, db):
@@ -312,16 +288,17 @@ def extract_district_from_address(address, db):
     return None, 0.0
 
 def extract_address(text):
-    match = re.search(
-        r"पता[:\s]*(.*?)\s*(क्रम|कण|कम|जन्म)\s*संख्या",
-        text,
-        re.DOTALL
-    )
+    match = re.search(r"निर्वाचक का नाम[:\s]*([^\n<]+)", text)
 
     if match:
         value = match.group(1)
-        value = re.sub(r"\s+", " ", value).strip()
-        return value, 0.9
+
+        value = re.sub(r"^नाम[:\s]*", "", value)
+
+        value = re.split(r"(ईपीआईसी|EPIC|पता|क्रम)", value)[0]
+        value = re.sub(r"[0-9]", "", value).strip()
+
+        return value, 0.95
 
     return None, 0.0
 
