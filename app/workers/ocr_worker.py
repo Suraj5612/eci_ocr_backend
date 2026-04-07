@@ -1,10 +1,10 @@
 import time
 import cv2
 from sqlalchemy.orm import Session
-from app.core.claude_parser import parse_with_claude
+from app.core.smart_parser import parse_smart
 from app.db.session import SessionLocal
 from app.models.job import Job
-from app.db.base_model import * 
+from app.db.base_model import *
 
 from app.core.image_processing import (
     download_image,
@@ -75,21 +75,14 @@ def process_job(job: Job, db: Session):
 
         print("📄 OCR Text received")
 
-        # 5. Parse OCR text — Claude first, regex fallback
-        parsed = parse_with_claude(ocr_text)
+        # 5. Parse OCR text with smart HTML-aware parser
+        parsed = parse_smart(ocr_text)
 
-        if parsed and parsed.get("name"):
-            print("✅ Claude parser succeeded")
-            # Normalize to {value, confidence} shape to match regex parser output
-            parsed = {
-                k: {"value": v, "confidence": 0.95 if v else 0.0}
-                for k, v in parsed.items()
-            }
+        if parsed.get("name", {}).get("value"):
+            print("✅ Smart parser succeeded")
         else:
-            print("⚠️ Claude parser failed or missing name")
+            print("⚠️ Smart parser: name not found")
             parsed = {}
-            # fallback to regex (disabled for now)
-            # parsed = parse_ocr_text(ocr_text, db)
 
         # 6. Save result
         job.status = "completed"
@@ -101,7 +94,7 @@ def process_job(job: Job, db: Session):
     except Exception as e:
         print(f"❌ ERROR: {str(e)}")
         job.status = "failed"
-        job.error = str(e)
+        job.error_message = str(e)
 
     db.commit()
     db.refresh(job)
@@ -140,7 +133,7 @@ def worker():
                 print(f"❌ Error processing job {job.id}: {str(e)}")
                 db.rollback()
                 job.status = "failed"
-                job.error = str(e)
+                job.error_message = str(e)
                 db.commit()
 
         finally:
