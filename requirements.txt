@@ -23,3 +23,5 @@ opencv-python
 requests
 rapidfuzz
 anthropic
+pillow-heif
+Pillow
