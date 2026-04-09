@@ -24,13 +24,65 @@ router = APIRouter()
 
 @router.get("/getVoters")
 def get_voters(
+    epic: Optional[str] = None,
+    page: int = 1,
+    limit: int = 50,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
     try:
+        if epic:
+            booth_id = current_user.booth_id
+
+            if not booth_id:
+                raise AppException(
+                    status_code=403,
+                    code="NO_BOOTH_ASSIGNED",
+                    message="Your account has no booth assigned"
+                )
+
+            voter = (
+                db.query(Voter)
+                .filter(
+                    Voter.epic == epic.strip(),
+                    Voter.booth_id == booth_id
+                )
+                .first()
+            )
+
+            if not voter:
+                raise AppException(
+                    status_code=404,
+                    code="VOTER_NOT_FOUND",
+                    message="No voter found with this EPIC in your booth"
+                )
+
+            return success_response(
+                data=[
+                    {
+                        "id": str(voter.id),
+                        "name": voter.name,
+                        "epic": voter.epic,
+                        "mobile": voter.mobile,
+                        "address": voter.address,
+                        "serial_number": voter.serial_number,
+                        "part_number_and_name": voter.part_number_and_name,
+                        "assembly_constituency_id": voter.assembly_constituency_id,
+                        "assembly_constituency_name": voter.assembly_constituency_name,
+                        "district": voter.district,
+                        "state": voter.state,
+                        "mandal_id": voter.mandal_id,
+                        "district_id": voter.district_id,
+                        "booth_id": voter.booth_id,
+                        "user_id": str(voter.user_id)
+                    }
+                ]
+            )
+
         query = get_base_query(db, current_user)
 
-        voters = query.limit(50).all()
+        offset = (page - 1) * limit
+        voters = query.offset(offset).limit(limit).all()
 
         return success_response(
             data=[
@@ -58,11 +110,11 @@ def get_voters(
     except AppException:
         raise
 
-    except Exception:
+    except Exception as e:
         raise AppException(
             status_code=500,
             code="INTERNAL_SERVER_ERROR",
-            message="Something went wrong while fetching voters"
+            message=f"Something went wrong while fetching voters: {str(e)}"
         )
 
 @router.post("/save")
