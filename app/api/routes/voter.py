@@ -41,16 +41,16 @@ def get_voters(
                     message="Your account has no booth assigned"
                 )
 
-            voter = (
+            voters = (
                 db.query(Voter)
                 .filter(
-                    Voter.epic == epic.strip(),
+                    Voter.epic.ilike(f"%{epic.strip()}%"),
                     Voter.booth_id == booth_id
                 )
-                .first()
+                .all()
             )
 
-            if not voter:
+            if not voters:
                 raise AppException(
                     status_code=404,
                     code="VOTER_NOT_FOUND",
@@ -60,22 +60,23 @@ def get_voters(
             return success_response(
                 data=[
                     {
-                        "id": str(voter.id),
-                        "name": voter.name,
-                        "epic": voter.epic,
-                        "mobile": voter.mobile,
-                        "address": voter.address,
-                        "serial_number": voter.serial_number,
-                        "part_number_and_name": voter.part_number_and_name,
-                        "assembly_constituency_id": voter.assembly_constituency_id,
-                        "assembly_constituency_name": voter.assembly_constituency_name,
-                        "district": voter.district,
-                        "state": voter.state,
-                        "mandal_id": voter.mandal_id,
-                        "district_id": voter.district_id,
-                        "booth_id": voter.booth_id,
-                        "user_id": str(voter.user_id)
+                        "id": str(v.id),
+                        "name": v.name,
+                        "epic": v.epic,
+                        "mobile": v.mobile,
+                        "address": v.address,
+                        "serial_number": v.serial_number,
+                        "part_number_and_name": v.part_number_and_name,
+                        "assembly_constituency_id": v.assembly_constituency_id,
+                        "assembly_constituency_name": v.assembly_constituency_name,
+                        "district": v.district,
+                        "state": v.state,
+                        "mandal_id": v.mandal_id,
+                        "district_id": v.district_id,
+                        "booth_id": v.booth_id,
+                        "user_id": str(v.user_id)
                     }
+                    for v in voters
                 ]
             )
 
