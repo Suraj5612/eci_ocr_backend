@@ -42,43 +42,52 @@ def get_voters(
                     message="Your account has no booth assigned"
                 )
 
-            voters = (
+            query = (
                 db.query(Voter)
                 .filter(
                     Voter.epic.ilike(f"%{epic.strip()}%"),
                     Voter.booth_id == booth_id
                 )
-                .all()
             )
 
-            if not voters:
-                raise AppException(
-                    status_code=404,
-                    code="VOTER_NOT_FOUND",
-                    message="No voter found with this EPIC in your booth"
-                )
+            total = query.count()
+
+            if total == 0:
+                from fastapi.responses import Response
+                return Response(status_code=204)
+
+            total_pages = math.ceil(total / limit) if limit > 0 else 1
+            offset = (page - 1) * limit
+            voters = query.offset(offset).limit(limit).all()
 
             return success_response(
-                data=[
-                    {
-                        "id": str(v.id),
-                        "name": v.name,
-                        "epic": v.epic,
-                        "mobile": v.mobile,
-                        "address": v.address,
-                        "serial_number": v.serial_number,
-                        "part_number_and_name": v.part_number_and_name,
-                        "assembly_constituency_id": v.assembly_constituency_id,
-                        "assembly_constituency_name": v.assembly_constituency_name,
-                        "district": v.district,
-                        "state": v.state,
-                        "mandal_id": v.mandal_id,
-                        "district_id": v.district_id,
-                        "booth_id": v.booth_id,
-                        "user_id": str(v.user_id)
-                    }
-                    for v in voters
-                ]
+                data={
+                    "voters": [
+                        {
+                            "id": str(v.id),
+                            "name": v.name,
+                            "epic": v.epic,
+                            "mobile": v.mobile,
+                            "address": v.address,
+                            "serial_number": v.serial_number,
+                            "part_number_and_name": v.part_number_and_name,
+                            "assembly_constituency_id": v.assembly_constituency_id,
+                            "assembly_constituency_name": v.assembly_constituency_name,
+                            "district": v.district,
+                            "state": v.state,
+                            "mandal_id": v.mandal_id,
+                            "district_id": v.district_id,
+                            "booth_id": v.booth_id,
+                            "user_id": str(v.user_id)
+                        }
+                        for v in voters
+                    ],
+                    "page": page,
+                    "limit": limit,
+                    "total": total,
+                    "totalPages": total_pages,
+                    "isLastPage": page >= total_pages,
+                }
             )
 
         query = get_base_query(db, current_user)
