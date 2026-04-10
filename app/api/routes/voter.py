@@ -1,5 +1,6 @@
 # app/api/routes/voter.py
 
+import math
 from typing import Optional
 from uuid import UUID
 
@@ -82,30 +83,40 @@ def get_voters(
 
         query = get_base_query(db, current_user)
 
+        total = query.count()
+        total_pages = math.ceil(total / limit) if limit > 0 else 1
+
         offset = (page - 1) * limit
         voters = query.offset(offset).limit(limit).all()
 
         return success_response(
-            data=[
-                {
-                    "id": str(v.id),
-                    "name": v.name,
-                    "epic": v.epic,
-                    "mobile": v.mobile,
-                    "address": v.address,
-                    "serial_number": v.serial_number,
-                    "part_number_and_name": v.part_number_and_name,
-                    "assembly_constituency_id": v.assembly_constituency_id,
-                    "assembly_constituency_name": v.assembly_constituency_name,
-                    "district": v.district,
-                    "state": v.state,
-                    "mandal_id": v.mandal_id,
-                    "district_id": v.district_id,
-                    "booth_id": v.booth_id,
-                    "user_id": str(v.user_id)
-                }
-                for v in voters
-            ]
+            data={
+                "voters": [
+                    {
+                        "id": str(v.id),
+                        "name": v.name,
+                        "epic": v.epic,
+                        "mobile": v.mobile,
+                        "address": v.address,
+                        "serial_number": v.serial_number,
+                        "part_number_and_name": v.part_number_and_name,
+                        "assembly_constituency_id": v.assembly_constituency_id,
+                        "assembly_constituency_name": v.assembly_constituency_name,
+                        "district": v.district,
+                        "state": v.state,
+                        "mandal_id": v.mandal_id,
+                        "district_id": v.district_id,
+                        "booth_id": v.booth_id,
+                        "user_id": str(v.user_id)
+                    }
+                    for v in voters
+                ],
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "totalPages": total_pages,
+                "isLastPage": page >= total_pages,
+            }
         )
 
     except AppException:
