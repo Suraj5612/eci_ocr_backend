@@ -1,0 +1,626 @@
+{
+  "info": {
+    "name": "ECI OCR Backend",
+    "_postman_id": "eci-ocr-backend-collection",
+    "description": "Full API collection for ECI OCR Backend. Set `username` and `password` in collection variables. The Login request auto-saves the bearer token; all other requests use it automatically. If a 401 is returned on any request, a pre-request script re-logs in and retries.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "username",
+      "value": "your_username",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "your_password",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Auto-login helper: called by any request that needs a token",
+          "function ensureToken(callback) {",
+          "    const token = pm.collectionVariables.get('access_token');",
+          "    if (token) {",
+          "        callback();",
+          "        return;",
+          "    }",
+          "    pm.sendRequest({",
+          "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+          "        method: 'POST',",
+          "        header: { 'Content-Type': 'application/json' },",
+          "        body: {",
+          "            mode: 'raw',",
+          "            raw: JSON.stringify({",
+          "                username: pm.collectionVariables.get('username'),",
+          "                password: pm.collectionVariables.get('password')",
+          "            })",
+          "        }",
+          "    }, function(err, res) {",
+          "        if (!err && res.code === 200) {",
+          "            pm.collectionVariables.set('access_token', res.json().access_token);",
+          "        }",
+          "        callback();",
+          "    });",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// If 401, clear token so the next request triggers re-login",
+          "if (pm.response.code === 401) {",
+          "    pm.collectionVariables.set('access_token', '');",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/register", "host": ["{{base_url}}"], "path": ["auth", "register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"John\",\n  \"middleName\": \"\",\n  \"lastName\": \"Doe\",\n  \"username\": \"johndoe\",\n  \"email\": \"john@example.com\",\n  \"mobile\": \"9999999999\",\n  \"password\": \"secret123\",\n  \"role\": \"booth\",\n  \"booth_id\": 1\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["// No pre-request needed — login sets the token itself"]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const json = pm.response.json();",
+                  "    pm.collectionVariables.set('access_token', json.access_token);",
+                  "    pm.test('Token saved', () => pm.expect(json.access_token).to.be.a('string'));",
+                  "} else {",
+                  "    pm.test('Login failed', () => pm.expect(pm.response.code).to.equal(200));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Current User",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.collectionVariables.get('access_token');",
+                  "if (!token) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "        method: 'POST',",
+                  "        header: { 'Content-Type': 'application/json' },",
+                  "        body: {",
+                  "            mode: 'raw',",
+                  "            raw: JSON.stringify({",
+                  "                username: pm.collectionVariables.get('username'),",
+                  "                password: pm.collectionVariables.get('password')",
+                  "            })",
+                  "        }",
+                  "    }, function(err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            pm.collectionVariables.set('access_token', res.json().access_token);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/auth/getUser", "host": ["{{base_url}}"], "path": ["auth", "getUser"] }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "OCR",
+      "item": [
+        {
+          "name": "Upload Image",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.collectionVariables.get('access_token');",
+                  "if (!token) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "        method: 'POST',",
+                  "        header: { 'Content-Type': 'application/json' },",
+                  "        body: {",
+                  "            mode: 'raw',",
+                  "            raw: JSON.stringify({",
+                  "                username: pm.collectionVariables.get('username'),",
+                  "                password: pm.collectionVariables.get('password')",
+                  "            })",
+                  "        }",
+                  "    }, function(err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            pm.collectionVariables.set('access_token', res.json().access_token);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const json = pm.response.json();",
+                  "    if (json.job_id) {",
+                  "        pm.collectionVariables.set('job_id', json.job_id);",
+                  "        pm.test('job_id saved', () => pm.expect(json.job_id).to.be.a('string'));",
+                  "    }",
+                  "}",
+                  "if (pm.response.code === 401) {",
+                  "    pm.collectionVariables.set('access_token', '');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{base_url}}/ocr/upload", "host": ["{{base_url}}"], "path": ["ocr", "upload"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": "" },
+                { "key": "isCropped", "value": "false", "type": "text" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get OCR Result",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.collectionVariables.get('access_token');",
+                  "if (!token) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "        method: 'POST',",
+                  "        header: { 'Content-Type': 'application/json' },",
+                  "        body: {",
+                  "            mode: 'raw',",
+                  "            raw: JSON.stringify({",
+                  "                username: pm.collectionVariables.get('username'),",
+                  "                password: pm.collectionVariables.get('password')",
+                  "            })",
+                  "        }",
+                  "    }, function(err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            pm.collectionVariables.set('access_token', res.json().access_token);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/ocr/result/{{job_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["ocr", "result", "{{job_id}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Voter",
+      "item": [
+        {
+          "name": "Get Voters (paginated)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.collectionVariables.get('access_token');",
+                  "if (!token) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "        method: 'POST',",
+                  "        header: { 'Content-Type': 'application/json' },",
+                  "        body: {",
+                  "            mode: 'raw',",
+                  "            raw: JSON.stringify({",
+                  "                username: pm.collectionVariables.get('username'),",
+                  "                password: pm.collectionVariables.get('password')",
+                  "            })",
+                  "        }",
+                  "    }, function(err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            pm.collectionVariables.set('access_token', res.json().access_token);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/voter/getVoters?page=1&limit=50",
+              "host": ["{{base_url}}"],
+              "path": ["voter", "getVoters"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "50" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search Voter by EPIC",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.collectionVariables.get('access_token');",
+                  "if (!token) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "        method: 'POST',",
+                  "        header: { 'Content-Type': 'application/json' },",
+                  "        body: {",
+                  "            mode: 'raw',",
+                  "            raw: JSON.stringify({",
+                  "                username: pm.collectionVariables.get('username'),",
+                  "                password: pm.collectionVariables.get('password')",
+                  "            })",
+                  "        }",
+                  "    }, function(err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            pm.collectionVariables.set('access_token', res.json().access_token);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/voter/getVoters?epic=ABC1234567",
+              "host": ["{{base_url}}"],
+              "path": ["voter", "getVoters"],
+              "query": [
+                { "key": "epic", "value": "ABC1234567" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Save Voter",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.collectionVariables.get('access_token');",
+                  "if (!token) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "        method: 'POST',",
+                  "        header: { 'Content-Type': 'application/json' },",
+                  "        body: {",
+                  "            mode: 'raw',",
+                  "            raw: JSON.stringify({",
+                  "                username: pm.collectionVariables.get('username'),",
+                  "                password: pm.collectionVariables.get('password')",
+                  "            })",
+                  "        }",
+                  "    }, function(err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            pm.collectionVariables.set('access_token', res.json().access_token);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const json = pm.response.json();",
+                  "    if (json.data && json.data.id) {",
+                  "        pm.collectionVariables.set('voter_id', json.data.id);",
+                  "    }",
+                  "}",
+                  "if (pm.response.code === 401) {",
+                  "    pm.collectionVariables.set('access_token', '');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/voter/save", "host": ["{{base_url}}"], "path": ["voter", "save"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ramesh Kumar\",\n  \"epic\": \"ABC1234567\",\n  \"mobile\": \"9876543210\",\n  \"address\": \"123, Main Street, Lucknow\",\n  \"serial_number\": 42,\n  \"part_number_and_name\": \"Part 5 - Ward A\",\n  \"assembly_constituency_name\": \"लखनऊ मध्य\",\n  \"district\": \"Lucknow\",\n  \"state\": \"Uttar Pradesh\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Voter",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.collectionVariables.get('access_token');",
+                  "if (!token) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "        method: 'POST',",
+                  "        header: { 'Content-Type': 'application/json' },",
+                  "        body: {",
+                  "            mode: 'raw',",
+                  "            raw: JSON.stringify({",
+                  "                username: pm.collectionVariables.get('username'),",
+                  "                password: pm.collectionVariables.get('password')",
+                  "            })",
+                  "        }",
+                  "    }, function(err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            pm.collectionVariables.set('access_token', res.json().access_token);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{base_url}}/voter/{{voter_id}}?ac_id=1",
+              "host": ["{{base_url}}"],
+              "path": ["voter", "{{voter_id}}"],
+              "query": [{ "key": "ac_id", "value": "1" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ramesh Kumar Updated\",\n  \"mobile\": \"9000000001\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Voter",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.collectionVariables.get('access_token');",
+                  "if (!token) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "        method: 'POST',",
+                  "        header: { 'Content-Type': 'application/json' },",
+                  "        body: {",
+                  "            mode: 'raw',",
+                  "            raw: JSON.stringify({",
+                  "                username: pm.collectionVariables.get('username'),",
+                  "                password: pm.collectionVariables.get('password')",
+                  "            })",
+                  "        }",
+                  "    }, function(err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            pm.collectionVariables.set('access_token', res.json().access_token);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/voter/{{voter_id}}?ac_id=1",
+              "host": ["{{base_url}}"],
+              "path": ["voter", "{{voter_id}}"],
+              "query": [{ "key": "ac_id", "value": "1" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Voter Count",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.collectionVariables.get('access_token');",
+                  "if (!token) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "        method: 'POST',",
+                  "        header: { 'Content-Type': 'application/json' },",
+                  "        body: {",
+                  "            mode: 'raw',",
+                  "            raw: JSON.stringify({",
+                  "                username: pm.collectionVariables.get('username'),",
+                  "                password: pm.collectionVariables.get('password')",
+                  "            })",
+                  "        }",
+                  "    }, function(err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            pm.collectionVariables.set('access_token', res.json().access_token);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/voter/count", "host": ["{{base_url}}"], "path": ["voter", "count"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Export Voters CSV",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.collectionVariables.get('access_token');",
+                  "if (!token) {",
+                  "    pm.sendRequest({",
+                  "        url: pm.collectionVariables.get('base_url') + '/auth/login',",
+                  "        method: 'POST',",
+                  "        header: { 'Content-Type': 'application/json' },",
+                  "        body: {",
+                  "            mode: 'raw',",
+                  "            raw: JSON.stringify({",
+                  "                username: pm.collectionVariables.get('username'),",
+                  "                password: pm.collectionVariables.get('password')",
+                  "            })",
+                  "        }",
+                  "    }, function(err, res) {",
+                  "        if (!err && res.code === 200) {",
+                  "            pm.collectionVariables.set('access_token', res.json().access_token);",
+                  "        }",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/voter/export",
+              "host": ["{{base_url}}"],
+              "path": ["voter", "export"],
+              "query": [
+                { "key": "name", "value": "", "disabled": true },
+                { "key": "mobile", "value": "", "disabled": true },
+                { "key": "epic", "value": "", "disabled": true },
+                { "key": "assembly_constituency_id", "value": "", "disabled": true },
+                { "key": "district_id", "value": "", "disabled": true }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

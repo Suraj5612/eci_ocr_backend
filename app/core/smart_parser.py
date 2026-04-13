@@ -15,6 +15,11 @@ Output shape is identical to the Claude parser:
 import re
 from html.parser import HTMLParser
 
+# OCR variant keywords — क्रम is commonly corrupted to कण or कम by Sarvam
+_SERIAL_KEYWORDS = ("कण संख्या", "क्रम संख्या", "कम संख्या")
+# विधानसभा is commonly corrupted to निधानसभा by Sarvam
+_CONSTITUENCY_KEYWORDS = ("विधानसभा", "निधानसभा", "निर्वाचन क्षेत्र का नाम")
+
 
 # ---------------------------------------------------------------------------
 # HTML → cell list
@@ -141,8 +146,8 @@ def _address_from_cell(cell: str) -> str | None:
 
 
 def _serial_from_cell(cell: str) -> str | None:
-    # कण संख्या / क्रम संख्या (both found in real data)
-    m = re.search(r"(?:कण|क्रम)\s*संख्या\s*:?\s*(\d+)", cell)
+    # कण संख्या / क्रम संख्या / कम संख्या (OCR variants of क्रम)
+    m = re.search(r"(?:कण|क्रम|कम)\s*संख्या\s*:?\s*(\d+)", cell)
     return m.group(1) if m else None
 
 
@@ -163,9 +168,10 @@ def _part_from_cell(cell: str) -> str | None:
 
 
 def _constituency_from_cell(cell: str) -> str | None:
-    # Capture everything from the label up to the state label (or end of cell)
+    # Capture everything from the label up to the state label (or end of cell).
+    # निधानसभा is a common OCR corruption of विधानसभा.
     m = re.search(
-        r"विधानसभा\s*/?\s*संसदीय\s*निर्वाचन\s*क्षेत्र\s*(?:का\s*नाम)?\s*:?\s*"
+        r"(?:विधानसभा|निधानसभा)\s*/?\s*संसदीय\s*निर्वाचन\s*क्षेत्र\s*(?:का\s*नाम)?\s*:?\s*"
         r"(.+?)(?=\nराज्य\s*(?:का\s*नाम)?|$)",
         cell, re.DOTALL,
     )
@@ -278,13 +284,13 @@ def parse_smart(raw_html: str) -> dict:
             fields["epic"]    = fields["epic"]    or _epic_from_cell(cell)
             fields["address"] = fields["address"] or _address_from_cell(cell)
 
-        if "कण संख्या" in cell or "क्रम संख्या" or "कम संख्या" in cell:
+        if any(kw in cell for kw in _SERIAL_KEYWORDS):
             fields["serial_number"] = fields["serial_number"] or _serial_from_cell(cell)
 
         if "भाग संख्या" in cell:
             fields["part_number_and_name"] = fields["part_number_and_name"] or _part_from_cell(cell)
 
-        if "विधानसभा" or "निधानसभा" or "निर्वाचन क्षेत्र का नाम" in cell:
+        if any(kw in cell for kw in _CONSTITUENCY_KEYWORDS):
             fields["assembly_constituency"] = fields["assembly_constituency"] or _constituency_from_cell(cell)
 
         if "राज्य" in cell:

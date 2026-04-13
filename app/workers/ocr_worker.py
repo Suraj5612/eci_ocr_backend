@@ -1,7 +1,8 @@
-import time
+import os
+import signal
+import threading
 import cv2
 from sqlalchemy.orm import Session
-from app.core.smart_parser import parse_smart
 from app.db.session import SessionLocal
 from app.models.job import Job
 from app.db.base_model import *
@@ -9,17 +10,39 @@ from app.db.base_model import *
 from app.core.image_processing import (
     download_image,
     crop_rois,
-    save_debug_images,
-    enhance_handwritten,
-    enhance_cropped
 )
 
-# 🔥 import sarvam
-from app.core.sarvam import run_sarvam
-from app.core.parser import parse_ocr_text
+# ---------------------------------------------------------------------------
+# OCR engines — swap active engine by toggling the imports below.
+#
+# Engine           | Output          | Parser
+# ---------------- | --------------- | ----------------------------
+# PaddleOCR        | plain text      | parse_ocr_text(text, db)
+# PaddleOCR-VL     | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE
+# Sarvam           | HTML            | parse_smart(text)  (no db)
+# ---------------------------------------------------------------------------
+
+# -- ACTIVE: PaddleOCR-VL (0.9B VLM, 109 langs including Hindi) --
+# -- Parsing disabled — saving raw_text only for output inspection --
+from app.core.paddleocr_vl_engine import run_paddleocr_vl
+
+# -- Sarvam OCR + HTML-aware smart parser (production) --
+# from app.core.sarvam import run_sarvam
+# from app.core.smart_parser import parse_smart
+
+# -- Classic PaddleOCR mobile models (local testing) --
+# from app.core.paddleocr_engine import run_paddleocr
 
 
 POLL_INTERVAL = 3  # seconds
+
+# Event set by signal handlers to stop the worker loop cleanly
+_stop_event = threading.Event()
+
+
+def _handle_shutdown(signum, frame):
+    print(f"\n🛑 Worker received signal {signum} — shutting down cleanly...")
+    _stop_event.set()
 
 
 def process_job(job: Job, db: Session):
@@ -33,62 +56,37 @@ def process_job(job: Job, db: Session):
 
         # 2. Process image
         if job.is_cropped:
-            print("🟢 Cropped image → enhancement")
-
-            #processed = enhance_cropped(image)
+            print("🟢 Cropped image → using as-is")
             processed = image
-
-            top_left = processed
-            form_section = processed
-
         else:
             print("🟡 Not cropped → ROI processing")
 
             top_left, form_section = crop_rois(image)
 
-            # printed
-            #top_left = enhance_cropped(top_left)
-
-            # handwritten (you can later improve)
-            #form_section = enhance_handwritten(form_section)
-
-            # ensure same width
             w = max(top_left.shape[1], form_section.shape[1])
-
             top_left_resized = cv2.resize(top_left, (w, top_left.shape[0]))
             form_section_resized = cv2.resize(form_section, (w, form_section.shape[0]))
 
-            # ensure same type (grayscale)
-            #if len(top_left_resized.shape) == 2:
-                #top_left_resized = cv2.cvtColor(top_left_resized, cv2.COLOR_GRAY2BGR)
-
-            #if len(form_section_resized.shape) == 2:
-                #form_section_resized = cv2.cvtColor(form_section_resized, cv2.COLOR_GRAY2BGR)
-
-            # concat
             processed = cv2.vconcat([top_left_resized, form_section_resized])
-            #processed = image
 
-        # 🔥 4. CALL SARVAM OCR
-        print("🧠 Calling Sarvam OCR...")
-        ocr_text = run_sarvam(processed)
+        # 3. Run PaddleOCR-VL
+        print("🧠 Calling PaddleOCR-VL...")
+        ocr_text = run_paddleocr_vl(processed)
+        print("📄 OCR text received")
 
-        print("📄 OCR Text received")
+        # 4. Parse disabled — saving raw output only for inspection
+        # Uncomment once output format is confirmed to match smart_parser expectations
+        # parsed = parse_smart(ocr_text)
+        # if parsed.get("name", {}).get("value"):
+        #     print("✅ Parser succeeded")
+        # else:
+        #     print("⚠️ Parser: name not found")
+        #     parsed = {}
 
-        # 5. Parse OCR text with smart HTML-aware parser
-        parsed = parse_smart(ocr_text)
-
-        if parsed.get("name", {}).get("value"):
-            print("✅ Smart parser succeeded")
-        else:
-            print("⚠️ Smart parser: name not found")
-            parsed = {}
-
-        # 6. Save result
+        # 5. Save result (raw only)
         job.status = "completed"
         job.result = {
             "raw_text": ocr_text,
-            "parsed": parsed
         }
 
     except Exception as e:
@@ -97,15 +95,30 @@ def process_job(job: Job, db: Session):
         job.error_message = str(e)
 
     db.commit()
-    db.refresh(job)
 
     print(f"🏁 Job finished: {job.id} → {job.status}")
 
 
 def worker():
-    print("🚀 Worker started...")
+    # Force line-buffered stdout so logs appear immediately in the terminal
+    # even when running as a child process (multiprocessing.Process buffers
+    # output by default)
+    import sys
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
 
-    while True:
+    print("🚀 Worker started...", flush=True)
+
+    # Register signal handlers so PaddlePaddle's C++ backend gets a chance
+    # to release resources before the process exits — prevents crashes on
+    # Ctrl+C or terminal close on macOS
+    try:
+        signal.signal(signal.SIGINT, _handle_shutdown)
+        signal.signal(signal.SIGTERM, _handle_shutdown)
+    except (OSError, ValueError):
+        pass
+
+    while not _stop_event.is_set():
         db: Session = SessionLocal()
 
         try:
@@ -118,10 +131,9 @@ def worker():
 
             if not job:
                 print("😴 No pending jobs...")
-                time.sleep(POLL_INTERVAL)
+                _stop_event.wait(timeout=POLL_INTERVAL)
                 continue
 
-            # mark processing
             job.status = "processing"
             db.commit()
             db.refresh(job)
@@ -139,8 +151,12 @@ def worker():
         finally:
             db.close()
 
-        time.sleep(POLL_INTERVAL)
+        _stop_event.wait(timeout=POLL_INTERVAL)
+
+    print("✅ Worker stopped cleanly")
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.set_start_method("spawn", force=True)  # required on macOS
     worker()

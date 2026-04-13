@@ -1,3 +1,14 @@
+import os
+import threading
+
+# Must be set before any paddle/torch import to prevent MPS/OpenMP crashes
+# on macOS Apple Silicon when the process receives a signal or aborts
+os.environ.setdefault("PYTHONUNBUFFERED", "1")
+os.environ.setdefault("FLAGS_call_stack_level", "0")
+os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+
 from fastapi import FastAPI
 from app.db.session import engine
 from app.db.base import Base
@@ -7,12 +18,9 @@ from app.api.routes import ocr
 
 from fastapi.responses import JSONResponse
 from fastapi.requests import Request
-from fastapi.exceptions import RequestValidationError
 
 from app.db.base_model import *  # important
 
-# 🔥 NEW IMPORTS
-import threading
 from app.utils.exceptions import AppException
 from app.workers.ocr_worker import worker
 from app.api.routes import voter
@@ -43,13 +51,8 @@ async def app_exception_handler(request: Request, exc: AppException):
     )
 
 
-# 🔥 ADD THIS (VERY IMPORTANT)
 @app.on_event("startup")
 def start_worker():
     print("🚀 Starting OCR worker...")
-
-    thread = threading.Thread(
-        target=worker,
-        daemon=True
-    )
-    thread.start()
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()

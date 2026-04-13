@@ -25,3 +25,10 @@ rapidfuzz
 anthropic
 pillow-heif
 Pillow
+paddleocr
+paddlepaddle
+
+# PaddleOCR-VL (VLM-based engine)
+transformers>=4.45.0
+qwen-vl-utils
+torch
