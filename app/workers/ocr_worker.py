@@ -22,7 +22,7 @@ from app.core.image_processing import (
 # Sarvam           | HTML            | parse_smart(text)  (no db)
 # ---------------------------------------------------------------------------
 
-# -- ACTIVE: PaddleOCR-VL (0.9B VLM, 109 langs including Hindi) --
+# -- ACTIVE: PaddleOCR-VL (0.9B VLM, 109 langs including Devanagari/Hindi) --
 # -- Parsing disabled — saving raw_text only for output inspection --
 from app.core.paddleocr_vl_engine import run_paddleocr_vl
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-FastAPI backend for ECI OCR — handles user authentication, voter record management, and image upload/OCR job tracking. Uses PostgreSQL (Supabase) for the database, Supabase Storage for image files, JWT tokens for auth, Sarvam AI for OCR, and a custom HTML-aware parser for structured field extraction. Deployed on Render.com.
+FastAPI backend for ECI OCR — handles user authentication, voter record management, and image upload/OCR job tracking. Uses PostgreSQL (Supabase) for the database, Supabase Storage for image files, JWT tokens for auth, and a local VLM for OCR. Deployed on Render.com.
 
 ## Development Commands
 
@@ -14,6 +14,9 @@ source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
+
+# CUDA PyTorch (RTX 4060 / cu128) — replaces the CPU torch from requirements.txt
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 # API server (hot reload) — worker starts automatically as a daemon thread
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -69,7 +72,8 @@ app/
 │   ├── smart_parser.py              # PRIMARY parser: HTML-aware, walks <td>/<th> cells, extracts all 9 fields
 │   ├── parser.py                    # Regex parser (disabled in worker); plain-text input, needs db session
 │   ├── claude_parser.py             # Claude API parser (disabled in worker); claude-sonnet-4-6
-│   └── paddleocr_engine.py          # PaddleOCR engine (disabled in worker); Linux/Render only — crashes on macOS Apple Silicon
+│   ├── paddleocr_engine.py          # Classic PaddleOCR engine (disabled); Linux/Render only — crashes on macOS Apple Silicon
+│   └── paddleocr_vl_engine.py       # PaddleOCR-VL engine (ACTIVE); 0.9B Qwen2.5-VL VLM; has 3 programmatic transformers 5.x patches
 ├── workers/
 │   └── ocr_worker.py                # Polling worker — started as daemon thread by main.py; can also run standalone
 ├── db/
@@ -91,25 +95,19 @@ On Render, the worker runs embedded in the web service (current `render.yaml` ha
 
 The worker has graceful shutdown via `threading.Event` + SIGINT/SIGTERM handlers. `_stop_event.wait(timeout=3)` is used instead of `time.sleep()` so it wakes immediately on shutdown signal.
 
-**macOS — standalone worker:** the `__main__` block calls `multiprocessing.set_start_method("spawn", force=True)` which is required on macOS. Also, `main.py` sets these env vars via `os.environ.setdefault` before any paddle import — they won't be set when running standalone unless you export them first:
-```bash
-export FLAGS_call_stack_level=0
-export GLOG_minloglevel=3
-export OMP_NUM_THREADS=1
-export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
-```
-
 ## OCR Engine Switching
 
-The worker supports multiple OCR engines. Switch by toggling the import block at the top of `ocr_worker.py`:
+The worker supports multiple OCR engines. Switch by toggling the import block at the top of `ocr_worker.py` and updating the `process_job` call:
 
 | Engine | Output | Parser | Status |
 |--------|--------|--------|--------|
-| Sarvam | HTML | `parse_smart(text)` — no db | **ACTIVE** |
-| PaddleOCR | plain text | `parse_ocr_text(text, db)` | Commented — local testing |
-| claude_parser.py | structured | — | Commented fallback |
+| PaddleOCR-VL | HTML/Markdown | `parse_smart(text)` — **currently disabled, raw_text only** | **ACTIVE** |
+| Sarvam | HTML | `parse_smart(text)` — no db | Commented — previous production path |
+| PaddleOCR (classic) | plain text | `parse_ocr_text(text, db)` | Commented — local testing |
 
-**PaddleOCR on macOS Apple Silicon** — the default PP-OCRv5 uses a server detection model (~500MB+) that OOM-kills the process. `core/paddleocr_engine.py` is already configured with explicit mobile models that work locally (PaddleOCR 3.x):
+**PaddleOCR-VL** (`core/paddleocr_vl_engine.py`) — **ACTIVE**. Has 3 programmatic compatibility patches for transformers 5.x (applied at import time, not in cache files): (1) restores `'default'`/`'mrope'` in `ROPE_INIT_FUNCTIONS`, (2) monkey-patches `PreTrainedModel._init_weights` to inject `compute_default_rope_parameters`, (3) wraps `prepare_inputs_for_generation` to handle `cache_position=None`. Uses `from_config` + manual safetensors loading to bypass accelerate meta-tensor init. dtype auto-selected via `torch.cuda.is_bf16_supported()` — bf16 if supported, fp16 otherwise, fp32 on CPU.
+
+**Classic PaddleOCR on macOS Apple Silicon** — `core/paddleocr_engine.py` is configured with explicit mobile models to avoid OOM (default PP-OCRv5 server model is too large):
 ```python
 PaddleOCR(
     text_detection_model_name="PP-OCRv4_mobile_det",
@@ -119,15 +117,13 @@ PaddleOCR(
     use_doc_unwarping=False,
 )
 ```
-- `lang` + `ocr_version` shortcuts are ignored when model names are set explicitly
 - PP-OCRv4 with `lang="hi"` does **not** work — v4 only supports `ch`/`en` via the shortcut; Hindi requires explicit model names as above
-- **Do not use `signal.alarm()` (SIGALRM) inside the worker** — the worker runs as a daemon thread, and `signal` only works on the main thread; it will raise immediately
-- Models download once to `~/.paddleocr/` on first run; clear with `rm -rf ~/.paddleocr/`
-- `parse_smart` expects Sarvam's **HTML** output — it will return empty fields on PaddleOCR plain text; use `parse_ocr_text` from `core/parser.py` for plain text
+- **Do not use `signal.alarm()` (SIGALRM) inside the worker** — the worker runs as a daemon thread; `signal` only works on the main thread
+- `parse_smart` expects Sarvam's **HTML** output — use `parse_ocr_text` from `core/parser.py` for PaddleOCR plain text
 
 ## Parsing Strategy
 
-**Active parser: `parse_smart`** from `core/smart_parser.py`:
+**Active parser: `parse_smart`** from `core/smart_parser.py` (currently disabled in worker — parsing re-enable pending output format verification):
 
 1. Uses stdlib `HTMLParser` to extract `<td>` and `<th>` cell text (`<br/>` → `\n`).
 2. **Pass 1** — header `<th>` cells: name, EPIC, address from left cell; serial, part, constituency, state from right cell.
@@ -198,9 +194,14 @@ GET    /voter/export            # Export CSV; filters: name, mobile, epic, assem
 1. `POST /ocr/upload` — HEIC/HEIF converted to JPEG, uploaded to Supabase Storage at `{user_id}/{job_id}/{uuid}.{ext}`, Job row created with `status="pending"` and `is_cropped` flag.
 2. Worker polls every 3s; picks oldest pending job → marks `processing`.
 3. Image preprocessing: if `is_cropped=True` uses as-is; otherwise `crop_rois()` extracts `[0:25%h, 0:60%w]` (structured data) + `[25%h:55%h, :]` (form/mobile section) and concatenates vertically.
-4. Sarvam AI (`core/sarvam.py`): uploads as ZIP, starts OCR job, polls (up to 30 retries × 4s), downloads HTML result.
-5. `parse_smart(ocr_text)` extracts all 9 fields. If `name` found → saved; else `parsed={}`.
-6. Job updated to `completed` with `{raw_text, parsed}` or `failed` with `error_message`.
+4. **Current active engine — PaddleOCR-VL** (`core/paddleocr_vl_engine.py`): runs the 0.9B Qwen2.5-VL VLM on the preprocessed image, returns HTML/Markdown.
+5. Parsing is **currently disabled** — job is saved with `{raw_text}` only (no `parsed` field) while output format is being verified.
+6. Job updated to `completed` with `{raw_text}` or `failed` with `error_message`.
+
+**Previous production path (Sarvam + parse_smart, currently commented out):**
+- Sarvam AI (`core/sarvam.py`): uploads as ZIP, starts OCR job, polls (up to 30 retries × 4s), downloads HTML result.
+- `parse_smart(ocr_text)` extracts all 9 fields. If `name` found → saved as `parsed`; else `parsed={}`.
+- Job saved with `{raw_text, parsed}`.
 
 **Note:** `image_processing.py` also contains `enhance_cropped`, `enhance_printed`, and `enhance_handwritten` functions, but the active worker pipeline does **not** call them — only `download_image` and `crop_rois` are used.
 
@@ -213,13 +214,13 @@ ALGORITHM                       # JWT algorithm (HS256)
 ACCESS_TOKEN_EXPIRE_MINUTES     # Token TTL (default: 60)
 SUPABASE_URL                    # Supabase project URL
 SUPABASE_SERVICE_ROLE_KEY       # Supabase service role key
-SARVAM_BASE_URL                 # Sarvam AI API endpoint
-SARVAM_API_KEY                  # Sarvam AI authentication key
+SARVAM_BASE_URL                 # Sarvam AI API endpoint (disabled — Sarvam engine commented out)
+SARVAM_API_KEY                  # Sarvam AI authentication key (disabled)
 ANTHROPIC_API_KEY               # Claude API key (claude_parser.py — disabled in worker)
-PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True  # Skips PaddleOCR connectivity check on startup
+PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True  # Skips PaddleOCR connectivity check — always set by main.py via os.environ.setdefault regardless of active engine
 ```
 
-The following are set programmatically in `main.py` via `os.environ.setdefault` before any paddle import. Set them manually when running the worker standalone on macOS:
+The following are set programmatically in `main.py` via `os.environ.setdefault` before any paddle import. Only relevant if re-enabling the PaddleOCR engine:
 ```
 FLAGS_call_stack_level=0        # Suppresses PaddlePaddle C++ stack traces
 GLOG_minloglevel=3              # Silences PaddlePaddle GLOG output
@@ -230,7 +231,7 @@ OMP_NUM_THREADS=1               # Prevents OpenMP thread oversubscription on App
 
 Current `render.yaml` defines a **single web service** (`eci-ocr-backend`) that runs both the FastAPI app and the embedded OCR worker daemon thread. Start command: `uvicorn app.main:app --host 0.0.0.0 --port 10000`.
 
-PaddleOCR requires **Standard plan (2GB RAM)** on Render if the PaddleOCR engine is active. Free/Starter (512MB) is insufficient.
+dots.ocr (3B, ~6GB VRAM) requires a GPU instance on Render for practical inference speed. CPU-only inference has a 300s timeout and will be very slow. Standard plan (2GB RAM) is borderline for CPU-only.
 
 ## Runtime Directories
 
