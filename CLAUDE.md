@@ -93,7 +93,7 @@ The OCR worker is started as a **daemon thread** inside `main.py` via `@app.on_e
 
 On Render, the worker runs embedded in the web service (current `render.yaml` has a single `eci-ocr-backend` web service). Deploying it as a separate Background Worker service is an option but not the current setup.
 
-The worker has graceful shutdown via `threading.Event` + SIGINT/SIGTERM handlers. `_stop_event.wait(timeout=3)` is used instead of `time.sleep()` so it wakes immediately on shutdown signal.
+The worker has graceful shutdown via `threading.Event` + SIGINT/SIGTERM handlers. `_stop_event.wait(timeout=3)` is used instead of `time.sleep()` so it wakes immediately on shutdown signal. Signal registration is wrapped in `try/except (OSError, ValueError): pass` — it silently fails when the worker runs as a daemon thread (signals only work on the main thread), but the `_stop_event` still triggers on Render's SIGTERM via the main thread.
 
 ## OCR Engine Switching
 
@@ -101,11 +101,14 @@ The worker supports multiple OCR engines. Switch by toggling the import block at
 
 | Engine | Output | Parser | Status |
 |--------|--------|--------|--------|
-| PaddleOCR-VL | HTML/Markdown | `parse_smart(text)` — **currently disabled, raw_text only** | **ACTIVE** |
+| MiniCPM-V | HTML/Markdown | `parse_smart(text)` — **currently disabled, raw_text only** | **ACTIVE** |
+| PaddleOCR-VL | HTML/Markdown | `parse_smart(text)` — no db | Commented — previous path |
 | Sarvam | HTML | `parse_smart(text)` — no db | Commented — previous production path |
 | PaddleOCR (classic) | plain text | `parse_ocr_text(text, db)` | Commented — local testing |
 
-**PaddleOCR-VL** (`core/paddleocr_vl_engine.py`) — **ACTIVE**. Has 3 programmatic compatibility patches for transformers 5.x (applied at import time, not in cache files): (1) restores `'default'`/`'mrope'` in `ROPE_INIT_FUNCTIONS`, (2) monkey-patches `PreTrainedModel._init_weights` to inject `compute_default_rope_parameters`, (3) wraps `prepare_inputs_for_generation` to handle `cache_position=None`. Uses `from_config` + manual safetensors loading to bypass accelerate meta-tensor init. dtype auto-selected via `torch.cuda.is_bf16_supported()` — bf16 if supported, fp16 otherwise, fp32 on CPU.
+**MiniCPM-V** (`core/minicpm_v_engine.py`) — **ACTIVE**. Model: `openbmb/MiniCPM-V-2_6` (8B params, Qwen2 LLM + SigLIP vision). Thread-safe singleton loading. VRAM-aware strategy: 4-bit NF4 (bitsandbytes, `bnb_4bit_use_double_quant=True`, ~4.5 GB) for ≤15 GB VRAM; bf16/fp16 for 16 GB+; fp32 on CPU. `torch.inference_mode()` + `sampling=False` (greedy). Falls back to omitting `system_prompt` kwarg on older releases (`TypeError` retry). `torch.cuda.empty_cache()` called after load and after each inference to release KV-cache memory.
+
+**PaddleOCR-VL** (`core/paddleocr_vl_engine.py`) — commented out. Has 3 programmatic compatibility patches for transformers 5.x (applied at import time, not in cache files): (1) restores `'default'`/`'mrope'` in `ROPE_INIT_FUNCTIONS`, (2) monkey-patches `PreTrainedModel._init_weights` to inject `compute_default_rope_parameters`, (3) wraps `prepare_inputs_for_generation` to handle `cache_position=None`. Uses `from_config` + manual safetensors loading to bypass accelerate meta-tensor init.
 
 **Classic PaddleOCR on macOS Apple Silicon** — `core/paddleocr_engine.py` is configured with explicit mobile models to avoid OOM (default PP-OCRv5 server model is too large):
 ```python
@@ -134,7 +137,7 @@ Key OCR variant handling in `smart_parser.py`:
 - Constituency: `_CONSTITUENCY_KEYWORDS` — matches `विधानसभा|निधानसभा` (OCR corrupts विधानसभा → निधानसभा)
 - Pass 1 conditions use `any(kw in cell for kw in _KEYWORD_CONSTANT)` — do NOT use `or "string"` pattern (always truthy)
 - EPIC: labeled values trusted without format gating; bare tokens use strict format validation
-- Confidence: base `0.4` + up to `0.59` from `format_valid`, `label_match`, `clean`, `db_match`; capped at `0.99`
+- Confidence: base `0.4` + up to `0.59` from `format_valid`, `label_match`, `clean`, `db_match`; capped at `0.99`. Exceptions: `serial_number` hardcoded to `0.97` if found (bypasses base formula); `state` hardcoded to `0.99` if value == `"उत्तर प्रदेश"`
 
 **Output shape** — all parsers produce the same structure:
 ```json
@@ -174,7 +177,10 @@ GET    /auth/getUser            # Current authenticated user
 ### OCR
 ```
 POST   /ocr/upload              # Multipart: file (jpeg/png/jpg/webp/svg/heic/heif, ≤10MB) + optional isCropped bool
-GET    /ocr/result/{job_id}     # Returns status; if completed: data field; if failed: error field
+GET    /ocr/result/{job_id}     # Polling endpoint; response shape varies by status:
+                                #   pending/processing → {"job_id": "...", "status": "pending"|"processing"}
+                                #   failed             → {"job_id": "...", "status": "failed", "error": "..."}
+                                #   completed          → {"job_id": "...", "status": "completed", "data": {"raw_text": "..."}}
 ```
 
 ### Voter
@@ -191,10 +197,10 @@ GET    /voter/export            # Export CSV; filters: name, mobile, epic, assem
 
 ## OCR Job Flow
 
-1. `POST /ocr/upload` — HEIC/HEIF converted to JPEG, uploaded to Supabase Storage at `{user_id}/{job_id}/{uuid}.{ext}`, Job row created with `status="pending"` and `is_cropped` flag.
+1. `POST /ocr/upload` — HEIC/HEIF converted to JPEG (quality=95), uploaded to Supabase Storage at `{user_id}/{job_id}/{uuid}.{ext}`, Job row created with `status="pending"` and `is_cropped` flag.
 2. Worker polls every 3s; picks oldest pending job → marks `processing`.
 3. Image preprocessing: if `is_cropped=True` uses as-is; otherwise `crop_rois()` extracts `[0:25%h, 0:60%w]` (structured data) + `[25%h:55%h, :]` (form/mobile section) and concatenates vertically.
-4. **Current active engine — PaddleOCR-VL** (`core/paddleocr_vl_engine.py`): runs the 0.9B Qwen2.5-VL VLM on the preprocessed image, returns HTML/Markdown.
+4. **Current active engine — MiniCPM-V** (`core/minicpm_v_engine.py`): runs the 8B MiniCPM-V-2_6 VLM on the preprocessed image, returns HTML/Markdown.
 5. Parsing is **currently disabled** — job is saved with `{raw_text}` only (no `parsed` field) while output format is being verified.
 6. Job updated to `completed` with `{raw_text}` or `failed` with `error_message`.
 
@@ -203,7 +209,7 @@ GET    /voter/export            # Export CSV; filters: name, mobile, epic, assem
 - `parse_smart(ocr_text)` extracts all 9 fields. If `name` found → saved as `parsed`; else `parsed={}`.
 - Job saved with `{raw_text, parsed}`.
 
-**Note:** `image_processing.py` also contains `enhance_cropped`, `enhance_printed`, and `enhance_handwritten` functions, but the active worker pipeline does **not** call them — only `download_image` and `crop_rois` are used.
+**Note:** `image_processing.py` also contains `enhance_cropped`, `enhance_printed`, `enhance_handwritten`, `normalize_lighting`, and `remove_shadow` functions, but the active worker pipeline does **not** call them — only `download_image` and `crop_rois` are used.
 
 ## Environment Variables
 
@@ -217,6 +223,7 @@ SUPABASE_SERVICE_ROLE_KEY       # Supabase service role key
 SARVAM_BASE_URL                 # Sarvam AI API endpoint (disabled — Sarvam engine commented out)
 SARVAM_API_KEY                  # Sarvam AI authentication key (disabled)
 ANTHROPIC_API_KEY               # Claude API key (claude_parser.py — disabled in worker)
+HF_TOKEN                        # HuggingFace token — required for gated models (MiniCPM-V-2_6). Accept license at huggingface.co/openbmb/MiniCPM-V-2_6, then create token at huggingface.co/settings/tokens
 PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True  # Skips PaddleOCR connectivity check — always set by main.py via os.environ.setdefault regardless of active engine
 ```
 
@@ -231,7 +238,30 @@ OMP_NUM_THREADS=1               # Prevents OpenMP thread oversubscription on App
 
 Current `render.yaml` defines a **single web service** (`eci-ocr-backend`) that runs both the FastAPI app and the embedded OCR worker daemon thread. Start command: `uvicorn app.main:app --host 0.0.0.0 --port 10000`.
 
-dots.ocr (3B, ~6GB VRAM) requires a GPU instance on Render for practical inference speed. CPU-only inference has a 300s timeout and will be very slow. Standard plan (2GB RAM) is borderline for CPU-only.
+The active MiniCPM-V engine (8B, ~4.5 GB VRAM in 4-bit NF4) requires a GPU instance on Render for practical inference speed. CPU-only inference will be extremely slow. `bitsandbytes` must be installed for GPUs with ≤15 GB VRAM.
+
+## AWS Deployment
+
+**Recommended instance: `g6.xlarge`** (confirmed available in `ap-south-1` / Mumbai).
+
+| Instance | GPU | VRAM | Strategy for MiniCPM-V | On-demand |
+|---|---|---|---|---|
+| `g6.xlarge` | L4 (Ada Lovelace) | 24 GB | fp16 — no bitsandbytes needed | ~$0.81/hr |
+| `g4dn.xlarge` | T4 (Turing) | 16 GB | 4-bit NF4 — bitsandbytes required | ~$0.53/hr |
+
+**Setup checklist for g6.xlarge:**
+- **AMI**: "Deep Learning Base OSS Nvidia Driver GPU AMI" (AWS Marketplace) — ships with CUDA, cuDNN, PyTorch
+- **Storage**: ≥50 GB EBS gp3 — model weights alone are ~15 GB download + OS + venv
+- **Security group**: open inbound port 8000 (dev) / 10000 (prod)
+- **HF_TOKEN**: set in environment — MiniCPM-V-2_6 is a gated repo
+- **First boot**: model downloads ~15 GB on the first OCR job — call `warmup()` at startup to pre-load before traffic hits
+
+**Engine VRAM usage on L4 (24 GB):**
+- MiniCPM-V-2_6 fp16: ~16 GB — engine auto-selects fp16 since VRAM ≥ 22 GB (threshold in `minicpm_v_engine.py`)
+- PaddleOCR-VL bf16: ~2.5 GB
+- Both loaded simultaneously: ~18.5 GB — fits with ~5.5 GB headroom
+
+**Do NOT import both `paddleocr_vl_engine` and `minicpm_v_engine` in the same worker process.** `paddleocr_vl_engine.py` monkey-patches `PreTrainedModel._init_weights` globally at import time (Patch 2) — this can interfere with MiniCPM-V's model loading. The worker uses mutually exclusive imports; keep it that way.
 
 ## Runtime Directories
 

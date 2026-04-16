@@ -17,14 +17,18 @@ from app.core.image_processing import (
 #
 # Engine           | Output          | Parser
 # ---------------- | --------------- | ----------------------------
-# PaddleOCR        | plain text      | parse_ocr_text(text, db)
-# PaddleOCR-VL     | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE
+# MiniCPM-V        | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE
+# PaddleOCR-VL     | HTML/Markdown   | parse_smart(text)  (no db)
 # Sarvam           | HTML            | parse_smart(text)  (no db)
+# PaddleOCR        | plain text      | parse_ocr_text(text, db)
 # ---------------------------------------------------------------------------
 
-# -- ACTIVE: PaddleOCR-VL (0.9B VLM, 109 langs including Devanagari/Hindi) --
+# -- ACTIVE: MiniCPM-V-2_6 (8B VLM, strong multilingual OCR incl. Hindi) --
 # -- Parsing disabled — saving raw_text only for output inspection --
-from app.core.paddleocr_vl_engine import run_paddleocr_vl
+from app.core.minicpm_v_engine import run_minicpm_v
+
+# -- PaddleOCR-VL (0.9B VLM, 109 langs including Devanagari/Hindi) --
+# from app.core.paddleocr_vl_engine import run_paddleocr_vl
 
 # -- Sarvam OCR + HTML-aware smart parser (production) --
 # from app.core.sarvam import run_sarvam
@@ -69,9 +73,9 @@ def process_job(job: Job, db: Session):
 
             processed = cv2.vconcat([top_left_resized, form_section_resized])
 
-        # 3. Run PaddleOCR-VL
-        print("🧠 Calling PaddleOCR-VL...")
-        ocr_text = run_paddleocr_vl(processed)
+        # 3. Run MiniCPM-V
+        print("🧠 Calling MiniCPM-V...")
+        ocr_text = run_minicpm_v(processed)
         print("📄 OCR text received")
 
         # 4. Parse disabled — saving raw output only for inspection
