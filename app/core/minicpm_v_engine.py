@@ -32,7 +32,7 @@ MODEL_ID = "openbmb/MiniCPM-V-2_6"
 # Inference limits — generous for EPIC card content (typically ~150–300 tokens)
 MAX_NEW_TOKENS = 512
 TIMEOUT_GPU = 120   # seconds; covers any CUDA GPU including slow T4
-TIMEOUT_CPU = 300   # seconds; CPU inference is very slow for an 8B model
+TIMEOUT_CPU = 900   # seconds; 8B fp32 on CPU can take 10-15 min per image
 
 # Set True to force 4-bit NF4 regardless of VRAM (useful for local testing)
 FORCE_4BIT = True
@@ -79,7 +79,17 @@ def _load():
         if _model is not None:          # re-check inside the lock
             return _model, _tokenizer
 
-        from transformers import AutoModel, AutoTokenizer
+        from transformers import AutoModel, AutoTokenizer, PreTrainedModel
+
+        # Patch: MiniCPMV (trust_remote_code) doesn't call PreTrainedModel.__init__
+        # in a way that sets all_tied_weights_keys; transformers 5.x expects a dict
+        # ({target: source} mapping). Setting it as a class-level fallback is safe —
+        # models that do call super().__init__() set their own instance attribute
+        # which shadows this class default.
+        if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
+            PreTrainedModel.all_tied_weights_keys = {}
+        elif not isinstance(PreTrainedModel.all_tied_weights_keys, dict):
+            PreTrainedModel.all_tied_weights_keys = {}
 
         hf_token = os.getenv("HF_TOKEN")
         if not hf_token:
@@ -103,7 +113,7 @@ def _load():
                 # High-VRAM path — full bf16/fp16 (A10G 24 GB, A100 40/80 GB, etc.)
                 # T4 and V100-16GB have exactly 16 GB — NOT enough for fp16 weights + activations
                 dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-                load_kwargs["torch_dtype"] = dtype
+                load_kwargs["dtype"] = dtype
                 strategy = "bf16" if dtype == torch.bfloat16 else "fp16"
             else:
                 # <22 GB VRAM (T4 16 GB, RTX 4060 8 GB, etc.) — 4-bit NF4 quantization (~4.5 GB)
@@ -121,13 +131,13 @@ def _load():
                     strategy = f"4-bit NF4 (double-quant, compute {compute_dtype})"
                 except ImportError:
                     # bitsandbytes not installed — warn and try fp16 anyway
-                    load_kwargs["torch_dtype"] = torch.float16
+                    load_kwargs["dtype"] = torch.float16
                     strategy = (
                         f"fp16 — WARNING: bitsandbytes not installed; "
                         f"~16 GB required, only {vram:.1f} GB available — likely OOM"
                     )
         else:
-            load_kwargs["torch_dtype"] = torch.float32
+            load_kwargs["dtype"] = torch.float32
             strategy = "fp32/CPU (very slow)"
 
         print(f"  ▸ Strategy: {strategy}")
@@ -142,6 +152,31 @@ def _load():
         _model.eval()
 
         _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True, token=hf_token)
+
+        # Patch: newer processing_minicpmv.py accesses tokenizer.im_start_id / im_end_id /
+        # slice_start_id / slice_end_id but TokenizersBackend (fast tokenizer) doesn't
+        # expose them as attributes.  Patch both the standalone tokenizer AND the tokenizer
+        # inside model.processor (which model.chat() loads lazily on first call — we
+        # pre-load it here so we can patch it before any chat() call).
+        def _patch_tokenizer(tok):
+            for _attr, _tok_str in [
+                ("im_start_id",    "<image>"),
+                ("im_end_id",      "</image>"),
+                ("slice_start_id", "<slice>"),
+                ("slice_end_id",   "</slice>"),
+            ]:
+                if not hasattr(tok, _attr):
+                    setattr(tok, _attr, tok.convert_tokens_to_ids(_tok_str))
+
+        _patch_tokenizer(_tokenizer)
+
+        # Pre-load the processor so we can patch its internal tokenizer.
+        # model.chat() checks model.processor first, so setting it here
+        # prevents a second AutoProcessor.from_pretrained() call later.
+        from transformers import AutoProcessor
+        _processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True, token=hf_token)
+        _patch_tokenizer(_processor.tokenizer)
+        _model.processor = _processor
 
         if device == "cuda":
             torch.cuda.empty_cache()
@@ -221,7 +256,7 @@ def run_minicpm_v(image: np.ndarray) -> str:
 
     if gen_thread.is_alive():
         hint = (
-            "pip install bitsandbytes for 4-bit quantization"
+            "CPU inference of 8B fp32 model is very slow — consider using a CUDA GPU"
             if not torch.cuda.is_available()
             else "check VRAM usage and model dtype"
         )

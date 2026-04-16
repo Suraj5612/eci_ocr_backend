@@ -72,8 +72,8 @@ app/
 │   ├── smart_parser.py              # PRIMARY parser: HTML-aware, walks <td>/<th> cells, extracts all 9 fields
 │   ├── parser.py                    # Regex parser (disabled in worker); plain-text input, needs db session
 │   ├── claude_parser.py             # Claude API parser (disabled in worker); claude-sonnet-4-6
-│   ├── smolvlm_engine.py            # SmolVLM engine (ACTIVE local testing); HuggingFaceTB/SmolVLM2-2.2B-Instruct; ~4.5 GB download; requires num2words; AutoModelForImageTextToText (transformers 5.x) with 4.x fallback
-│   ├── minicpm_v_engine.py          # MiniCPM-V engine (production candidate); openbmb/MiniCPM-V-2_6 8B VLM; FORCE_4BIT flag; thread-timeout wrapper (120s GPU / 300s CPU)
+│   ├── smolvlm_engine.py            # SmolVLM engine (disabled — local testing only); HuggingFaceTB/SmolVLM2-2.2B-Instruct; ~4.5 GB download; requires num2words; AutoModelForImageTextToText (transformers 5.x) with 4.x fallback
+│   ├── minicpm_v_engine.py          # MiniCPM-V engine (ACTIVE); openbmb/MiniCPM-V-2_6 8B VLM; FORCE_4BIT flag; thread-timeout wrapper (120s GPU / 300s CPU); 4 transformers 5.x compatibility patches
 │   ├── paddleocr_engine.py          # Classic PaddleOCR engine (disabled); Linux/Render only — crashes on macOS Apple Silicon
 │   └── paddleocr_vl_engine.py       # PaddleOCR-VL engine (disabled); 0.9B Qwen2.5-VL VLM; has 3 programmatic transformers 5.x patches
 ├── workers/
@@ -103,15 +103,19 @@ The worker supports multiple OCR engines. Switch by toggling the import block at
 
 | Engine | Output | Parser | Status |
 |--------|--------|--------|--------|
-| SmolVLM-500M | HTML/Markdown | `parse_smart(text)` — raw_text only | **ACTIVE (local testing)** |
-| MiniCPM-V | HTML/Markdown | `parse_smart(text)` — raw_text only | Commented — production candidate |
+| MiniCPM-V | HTML/Markdown | `parse_smart(text)` — raw_text only | **ACTIVE** |
+| SmolVLM-2.2B | HTML/Markdown | `parse_smart(text)` — raw_text only | Commented — local testing |
 | PaddleOCR-VL | HTML/Markdown | `parse_smart(text)` — no db | Commented — previous path |
 | Sarvam | HTML | `parse_smart(text)` — no db | Commented — previous production path |
 | PaddleOCR (classic) | plain text | `parse_ocr_text(text, db)` | Commented — local testing |
 
-**SmolVLM2-2.2B** (`core/smolvlm_engine.py`) — **ACTIVE (local testing)**. Model: `HuggingFaceTB/SmolVLM2-2.2B-Instruct` (SigLIP vision + SmolLM2 LM, 2.2B params). ~4.5 GB download, no HF_TOKEN required. fp16 on CUDA (~5 GB VRAM), fp32 on CPU. Uses `AutoModelForImageTextToText` (transformers 5.x) with `AutoModelForVision2Seq` fallback for 4.x. Thread-timeout: 120s GPU / 600s CPU. Decodes only newly generated tokens (strips prompt echo via `generated_ids[:, input_ids.shape[1]:]`). Better multilingual coverage than 500M; still weaker on Hindi/Devanagari than MiniCPM-V. Requires `num2words` (`pip install num2words`) — needed by the SmolVLM2 processor.
+**MiniCPM-V** (`core/minicpm_v_engine.py`) — **ACTIVE**. Model: `openbmb/MiniCPM-V-2_6` (8B params, Qwen2 LLM + SigLIP vision). `FORCE_4BIT = True` flag forces 4-bit NF4 regardless of VRAM (set `False` for L4/A100 deployment). VRAM-aware strategy: 4-bit NF4 (bitsandbytes, `bnb_4bit_use_double_quant=True`, ~4.5 GB) for <22 GB VRAM; bf16/fp16 for ≥22 GB VRAM; fp32 on CPU. Thread-timeout: 120s GPU / 300s CPU. `sampling=False` (greedy). Falls back to omitting `system_prompt` kwarg on older releases (`TypeError` retry). HF_TOKEN **required** — raises `EnvironmentError` at load time if missing. Four transformers 5.x compatibility patches applied at load time in `_load()`:
+1. `PreTrainedModel.all_tied_weights_keys` — set to `{}` if missing/wrong type (transformers 5.x expects a dict; MiniCPMV's `trust_remote_code` skips the `super().__init__()` path that sets it)
+2. `dtype` kwarg — uses `dtype=` not `torch_dtype=` for model loading (API compatibility)
+3. Tokenizer attribute patch — adds `im_start_id`, `im_end_id`, `slice_start_id`, `slice_end_id` to the fast tokenizer via `convert_tokens_to_ids` (newer `processing_minicpmv.py` accesses these directly)
+4. Processor pre-load — explicitly loads `AutoProcessor` and patches its internal tokenizer before first `model.chat()` call (prevents lazy-load missing the patch window)
 
-**MiniCPM-V** (`core/minicpm_v_engine.py`) — commented out (production candidate). Model: `openbmb/MiniCPM-V-2_6` (8B params, Qwen2 LLM + SigLIP vision). `FORCE_4BIT = True` flag forces 4-bit NF4 regardless of VRAM (set `False` for L4/A100 deployment). VRAM-aware strategy: 4-bit NF4 (bitsandbytes, `bnb_4bit_use_double_quant=True`, ~4.5 GB) for <22 GB VRAM; bf16/fp16 for ≥22 GB VRAM; fp32 on CPU. Thread-timeout: 120s GPU / 300s CPU. `sampling=False` (greedy). Falls back to omitting `system_prompt` kwarg on older releases (`TypeError` retry).
+**SmolVLM2-2.2B** (`core/smolvlm_engine.py`) — commented out (local testing). Model: `HuggingFaceTB/SmolVLM2-2.2B-Instruct` (SigLIP vision + SmolLM2 LM, 2.2B params). ~4.5 GB download, no HF_TOKEN required. fp16 on CUDA (~5 GB VRAM), fp32 on CPU. Uses `AutoModelForImageTextToText` (transformers 5.x) with `AutoModelForVision2Seq` fallback for 4.x. Thread-timeout: 120s GPU / 600s CPU. Decodes only newly generated tokens (strips prompt echo via `generated_ids[:, input_ids.shape[1]:]`). Weaker on Hindi/Devanagari than MiniCPM-V. Requires `num2words` (`pip install num2words`).
 
 **PaddleOCR-VL** (`core/paddleocr_vl_engine.py`) — commented out. Has 3 programmatic compatibility patches for transformers 5.x (applied at import time, not in cache files): (1) restores `'default'`/`'mrope'` in `ROPE_INIT_FUNCTIONS`, (2) monkey-patches `PreTrainedModel._init_weights` to inject `compute_default_rope_parameters`, (3) wraps `prepare_inputs_for_generation` to handle `cache_position=None`. Uses `from_config` + manual safetensors loading to bypass accelerate meta-tensor init.
 
@@ -205,7 +209,7 @@ GET    /voter/export            # Export CSV; filters: name, mobile, epic, assem
 1. `POST /ocr/upload` — HEIC/HEIF converted to JPEG (quality=95), uploaded to Supabase Storage at `{user_id}/{job_id}/{uuid}.{ext}`, Job row created with `status="pending"` and `is_cropped` flag.
 2. Worker polls every 3s; picks oldest pending job → marks `processing`.
 3. Image preprocessing: if `is_cropped=True` uses as-is; otherwise `crop_rois()` extracts `[0:25%h, 0:60%w]` (structured data) + `[25%h:55%h, :]` (form/mobile section) and concatenates vertically.
-4. **Current active engine — MiniCPM-V** (`core/minicpm_v_engine.py`): runs the 8B MiniCPM-V-2_6 VLM on the preprocessed image, returns HTML/Markdown. The system prompt instructs the model to extract EPIC card fields verbatim and preserve table structure as HTML (`<table>/<tr>/<th>/<td>`). The user prompt asks for field labels in `<th>` cells and values in `<td>` cells — this is what `parse_smart()` expects.
+4. **Current active engine — MiniCPM-V-2_6** (`core/minicpm_v_engine.py`): runs the 8B MiniCPM-V VLM on the preprocessed image, returns HTML/Markdown. The prompt instructs the model to extract EPIC card fields and return them as an HTML table with labels in `<th>` cells and values in `<td>` cells — this is what `parse_smart()` expects.
 5. Parsing is **currently disabled** — job is saved with `{raw_text}` only (no `parsed` field) while output format is being verified.
 6. Job updated to `completed` with `{raw_text}` or `failed` with `error_message`.
 
@@ -228,7 +232,7 @@ SUPABASE_SERVICE_ROLE_KEY       # Supabase service role key
 SARVAM_BASE_URL                 # Sarvam AI API endpoint (disabled — Sarvam engine commented out)
 SARVAM_API_KEY                  # Sarvam AI authentication key (disabled)
 ANTHROPIC_API_KEY               # Claude API key (claude_parser.py — disabled in worker)
-HF_TOKEN                        # HuggingFace token — required for gated models (MiniCPM-V-2_6). Accept license at huggingface.co/openbmb/MiniCPM-V-2_6, then create token at huggingface.co/settings/tokens
+HF_TOKEN                        # HuggingFace token — REQUIRED (active engine is MiniCPM-V-2_6, a gated model). Accept license at huggingface.co/openbmb/MiniCPM-V-2_6, create token at huggingface.co/settings/tokens. Engine raises EnvironmentError at load time if missing.
 PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True  # Skips PaddleOCR connectivity check — always set by main.py via os.environ.setdefault regardless of active engine
 ```
 
@@ -243,7 +247,7 @@ OMP_NUM_THREADS=1               # Prevents OpenMP thread oversubscription on App
 
 Current `render.yaml` defines a **single web service** (`eci-ocr-backend`) that runs both the FastAPI app and the embedded OCR worker daemon thread. Start command: `uvicorn app.main:app --host 0.0.0.0 --port 10000`.
 
-The active MiniCPM-V engine (8B, ~4.5 GB VRAM in 4-bit NF4) requires a GPU instance on Render for practical inference speed. CPU-only inference will be extremely slow. `bitsandbytes` must be installed for GPUs with <22 GB VRAM (T4 16 GB, RTX 4060 8 GB, etc.) — the engine's VRAM threshold is `vram >= 22` in `minicpm_v_engine.py`.
+The active MiniCPM-V-2_6 engine requires a GPU instance on Render for practical inference speed. CPU-only inference is extremely slow (~5 min/image). `bitsandbytes` must be installed for GPUs with <22 GB VRAM (`FORCE_4BIT = True` in `minicpm_v_engine.py` forces 4-bit NF4 regardless; ~4.5 GB active VRAM). VRAM threshold for full bf16/fp16 is `vram >= 22` (line 112 of `minicpm_v_engine.py`).
 
 ## AWS Deployment
 
@@ -262,7 +266,7 @@ The active MiniCPM-V engine (8B, ~4.5 GB VRAM in 4-bit NF4) requires a GPU insta
 - **First boot**: model downloads ~15 GB on the first OCR job — call `warmup()` (defined in `core/minicpm_v_engine.py`) at startup to pre-load before traffic hits. Currently **not wired in `main.py`** — add `from app.core.minicpm_v_engine import warmup; warmup()` inside `start_worker()` to enable it.
 
 **Engine VRAM usage on L4 (24 GB):**
-- MiniCPM-V-2_6 bf16/fp16: ~16 GB — engine auto-selects bf16 (L4 supports it) since VRAM ≥ 22 GB (hardcoded threshold in `minicpm_v_engine.py` line 99)
+- MiniCPM-V-2_6 bf16/fp16: ~16 GB — engine auto-selects bf16 (L4 supports it) since VRAM ≥ 22 GB (hardcoded threshold in `minicpm_v_engine.py` line 112)
 - PaddleOCR-VL bf16: ~2.5 GB
 - Both loaded simultaneously: ~18.5 GB — fits with ~5.5 GB headroom
 

@@ -17,18 +17,18 @@ from app.core.image_processing import (
 #
 # Engine           | Output          | Parser
 # ---------------- | --------------- | ----------------------------
-# SmolVLM-500M     | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE (local testing)
-# MiniCPM-V        | HTML/Markdown   | parse_smart(text)  (no db)
+# SmolVLM-500M     | HTML/Markdown   | parse_smart(text)  (no db)
+# MiniCPM-V        | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE
 # PaddleOCR-VL     | HTML/Markdown   | parse_smart(text)  (no db)
 # Sarvam           | HTML            | parse_smart(text)  (no db)
 # PaddleOCR        | plain text      | parse_ocr_text(text, db)
 # ---------------------------------------------------------------------------
 
-# -- ACTIVE: SmolVLM-500M (local testing — low VRAM, weaker Hindi OCR) --
-from app.core.smolvlm_engine import run_smolvlm
+# -- SmolVLM-500M (local testing — low VRAM, weaker Hindi OCR) --
+# from app.core.smolvlm_engine import run_smolvlm
 
-# -- MiniCPM-V-2_6 (8B VLM, strong multilingual OCR incl. Hindi) --
-# from app.core.minicpm_v_engine import run_minicpm_v
+# -- ACTIVE: MiniCPM-V-2_6 (8B VLM, strong multilingual OCR incl. Hindi) --
+from app.core.minicpm_v_engine import run_minicpm_v
 
 # -- PaddleOCR-VL (0.9B VLM, 109 langs including Devanagari/Hindi) --
 # from app.core.paddleocr_vl_engine import run_paddleocr_vl
@@ -76,9 +76,9 @@ def process_job(job: Job, db: Session):
 
             processed = cv2.vconcat([top_left_resized, form_section_resized])
 
-        # 3. Run SmolVLM
-        print("🧠 Calling SmolVLM...")
-        ocr_text = run_smolvlm(processed)
+        # 3. Run MiniCPM-V
+        print("🧠 Calling MiniCPM-V...")
+        ocr_text = run_minicpm_v(processed)
         print("📄 OCR text received")
 
         # 4. Parse disabled — saving raw output only for inspection
