@@ -72,8 +72,9 @@ app/
 │   ├── smart_parser.py              # PRIMARY parser: HTML-aware, walks <td>/<th> cells, extracts all 9 fields
 │   ├── parser.py                    # Regex parser (disabled in worker); plain-text input, needs db session
 │   ├── claude_parser.py             # Claude API parser (disabled in worker); claude-sonnet-4-6
+│   ├── minicpm_v_engine.py          # MiniCPM-V engine (ACTIVE); openbmb/MiniCPM-V-2_6 8B VLM; thread-safe singleton; VRAM-aware loading; thread-timeout wrapper (120s GPU / 300s CPU)
 │   ├── paddleocr_engine.py          # Classic PaddleOCR engine (disabled); Linux/Render only — crashes on macOS Apple Silicon
-│   └── paddleocr_vl_engine.py       # PaddleOCR-VL engine (ACTIVE); 0.9B Qwen2.5-VL VLM; has 3 programmatic transformers 5.x patches
+│   └── paddleocr_vl_engine.py       # PaddleOCR-VL engine (disabled); 0.9B Qwen2.5-VL VLM; has 3 programmatic transformers 5.x patches
 ├── workers/
 │   └── ocr_worker.py                # Polling worker — started as daemon thread by main.py; can also run standalone
 ├── db/
@@ -106,7 +107,7 @@ The worker supports multiple OCR engines. Switch by toggling the import block at
 | Sarvam | HTML | `parse_smart(text)` — no db | Commented — previous production path |
 | PaddleOCR (classic) | plain text | `parse_ocr_text(text, db)` | Commented — local testing |
 
-**MiniCPM-V** (`core/minicpm_v_engine.py`) — **ACTIVE**. Model: `openbmb/MiniCPM-V-2_6` (8B params, Qwen2 LLM + SigLIP vision). Thread-safe singleton loading. VRAM-aware strategy: 4-bit NF4 (bitsandbytes, `bnb_4bit_use_double_quant=True`, ~4.5 GB) for ≤15 GB VRAM; bf16/fp16 for 16 GB+; fp32 on CPU. `torch.inference_mode()` + `sampling=False` (greedy). Falls back to omitting `system_prompt` kwarg on older releases (`TypeError` retry). `torch.cuda.empty_cache()` called after load and after each inference to release KV-cache memory.
+**MiniCPM-V** (`core/minicpm_v_engine.py`) — **ACTIVE**. Model: `openbmb/MiniCPM-V-2_6` (8B params, Qwen2 LLM + SigLIP vision). Thread-safe singleton loading. VRAM-aware strategy: 4-bit NF4 (bitsandbytes, `bnb_4bit_use_double_quant=True`, ~4.5 GB) for <22 GB VRAM (covers T4 16 GB, RTX 4060 8 GB — T4's 16 GB is not enough for fp16 weights + activations); bf16/fp16 for ≥22 GB VRAM (L4 24 GB, A100, etc.); fp32 on CPU. Inference runs in a daemon thread with a timeout (120s GPU, 300s CPU) via `gen_thread.join(timeout=...)`. `torch.inference_mode()` + `sampling=False` (greedy). Falls back to omitting `system_prompt` kwarg on older releases (`TypeError` retry). `torch.cuda.empty_cache()` called after load and after each inference to release KV-cache memory.
 
 **PaddleOCR-VL** (`core/paddleocr_vl_engine.py`) — commented out. Has 3 programmatic compatibility patches for transformers 5.x (applied at import time, not in cache files): (1) restores `'default'`/`'mrope'` in `ROPE_INIT_FUNCTIONS`, (2) monkey-patches `PreTrainedModel._init_weights` to inject `compute_default_rope_parameters`, (3) wraps `prepare_inputs_for_generation` to handle `cache_position=None`. Uses `from_config` + manual safetensors loading to bypass accelerate meta-tensor init.
 
@@ -246,8 +247,8 @@ The active MiniCPM-V engine (8B, ~4.5 GB VRAM in 4-bit NF4) requires a GPU insta
 
 | Instance | GPU | VRAM | Strategy for MiniCPM-V | On-demand |
 |---|---|---|---|---|
-| `g6.xlarge` | L4 (Ada Lovelace) | 24 GB | fp16 — no bitsandbytes needed | ~$0.81/hr |
-| `g4dn.xlarge` | T4 (Turing) | 16 GB | 4-bit NF4 — bitsandbytes required | ~$0.53/hr |
+| `g6.xlarge` | L4 (Ada Lovelace) | 24 GB | fp16/bf16 (≥22 GB threshold) — no bitsandbytes needed | ~$0.81/hr |
+| `g4dn.xlarge` | T4 (Turing) | 16 GB | 4-bit NF4 (<22 GB threshold) — bitsandbytes required | ~$0.53/hr |
 
 **Setup checklist for g6.xlarge:**
 - **AMI**: "Deep Learning Base OSS Nvidia Driver GPU AMI" (AWS Marketplace) — ships with CUDA, cuDNN, PyTorch
@@ -257,7 +258,7 @@ The active MiniCPM-V engine (8B, ~4.5 GB VRAM in 4-bit NF4) requires a GPU insta
 - **First boot**: model downloads ~15 GB on the first OCR job — call `warmup()` at startup to pre-load before traffic hits
 
 **Engine VRAM usage on L4 (24 GB):**
-- MiniCPM-V-2_6 fp16: ~16 GB — engine auto-selects fp16 since VRAM ≥ 22 GB (threshold in `minicpm_v_engine.py`)
+- MiniCPM-V-2_6 bf16/fp16: ~16 GB — engine auto-selects bf16 (L4 supports it) since VRAM ≥ 22 GB (hardcoded threshold in `minicpm_v_engine.py` line 99)
 - PaddleOCR-VL bf16: ~2.5 GB
 - Both loaded simultaneously: ~18.5 GB — fits with ~5.5 GB headroom
 
