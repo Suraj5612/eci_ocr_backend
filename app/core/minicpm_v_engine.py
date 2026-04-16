@@ -8,7 +8,7 @@ Model: openbmb/MiniCPM-V-2_6 (Qwen2 LLM + SigLIP vision encoder, 8B params)
 
 Install:
   pip install transformers torch torchvision pillow sentencepiece timm
-  pip install bitsandbytes          # required for 4-bit NF4 on ≤15 GB VRAM GPUs
+  pip install bitsandbytes          # required for 4-bit NF4 on <22 GB VRAM GPUs (T4 16 GB, RTX 4060 8 GB, etc.)
   # CUDA build (RTX 4060 / cu128):
   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
@@ -33,6 +33,9 @@ MODEL_ID = "openbmb/MiniCPM-V-2_6"
 MAX_NEW_TOKENS = 512
 TIMEOUT_GPU = 120   # seconds; covers any CUDA GPU including slow T4
 TIMEOUT_CPU = 300   # seconds; CPU inference is very slow for an 8B model
+
+# Set True to force 4-bit NF4 regardless of VRAM (useful for local testing)
+FORCE_4BIT = True
 
 # ---------------------------------------------------------------------------
 # Focused system prompt for EPIC card OCR
@@ -96,7 +99,7 @@ def _load():
         strategy: str
 
         if device == "cuda":
-            if vram >= 22:
+            if vram >= 22 and not FORCE_4BIT:
                 # High-VRAM path — full bf16/fp16 (A10G 24 GB, A100 40/80 GB, etc.)
                 # T4 and V100-16GB have exactly 16 GB — NOT enough for fp16 weights + activations
                 dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
