@@ -35,7 +35,7 @@ TIMEOUT_GPU = 120   # seconds; covers any CUDA GPU including slow T4
 TIMEOUT_CPU = 900   # seconds; 8B fp32 on CPU can take 10-15 min per image
 
 # Set True to force 4-bit NF4 regardless of VRAM (useful for local testing)
-FORCE_4BIT = True
+FORCE_4BIT = False
 
 # ---------------------------------------------------------------------------
 # Focused system prompt for EPIC card OCR
