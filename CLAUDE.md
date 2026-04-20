@@ -73,7 +73,8 @@ app/
 │   ├── parser.py                    # Regex parser (disabled in worker); plain-text input, needs db session
 │   ├── claude_parser.py             # Claude API parser (disabled in worker); claude-sonnet-4-6
 │   ├── smolvlm_engine.py            # SmolVLM engine (disabled — local testing only); HuggingFaceTB/SmolVLM2-2.2B-Instruct; ~4.5 GB download; requires num2words; AutoModelForImageTextToText (transformers 5.x) with 4.x fallback
-│   ├── minicpm_v_engine.py          # MiniCPM-V engine (ACTIVE); openbmb/MiniCPM-V-2_6 8B VLM; FORCE_4BIT flag; thread-timeout wrapper (120s GPU / 300s CPU); 4 transformers 5.x compatibility patches
+│   ├── chandra_ocr_engine.py        # ChandraOCR engine (ACTIVE); datalab-to/chandra-ocr-2 5B VLM; bf16 GPU / fp32 CPU; thread-timeout wrapper (120s GPU / 600s CPU); uses chandra-ocr[hf] library
+│   ├── minicpm_v_engine.py          # MiniCPM-V engine (disabled); openbmb/MiniCPM-V-2_6 8B VLM; FORCE_4BIT flag; thread-timeout wrapper (120s GPU / 900s CPU); 4 transformers 5.x compatibility patches
 │   ├── paddleocr_engine.py          # Classic PaddleOCR engine (disabled); Linux/Render only — crashes on macOS Apple Silicon
 │   └── paddleocr_vl_engine.py       # PaddleOCR-VL engine (disabled); 0.9B Qwen2.5-VL VLM; has 3 programmatic transformers 5.x patches
 ├── workers/
@@ -103,17 +104,20 @@ The worker supports multiple OCR engines. Switch by toggling the import block at
 
 | Engine | Output | Parser | Status |
 |--------|--------|--------|--------|
-| MiniCPM-V | HTML/Markdown | `parse_smart(text)` — raw_text only | **ACTIVE** |
+| ChandraOCR | Markdown/HTML | `parse_smart(text)` — raw_text only | **ACTIVE** |
+| MiniCPM-V | HTML/Markdown | `parse_smart(text)` — raw_text only | Commented — needs GPU |
 | SmolVLM-2.2B | HTML/Markdown | `parse_smart(text)` — raw_text only | Commented — local testing |
 | PaddleOCR-VL | HTML/Markdown | `parse_smart(text)` — no db | Commented — previous path |
 | Sarvam | HTML | `parse_smart(text)` — no db | Commented — previous production path |
 | PaddleOCR (classic) | plain text | `parse_ocr_text(text, db)` | Commented — local testing |
 
-**MiniCPM-V** (`core/minicpm_v_engine.py`) — **ACTIVE**. Model: `openbmb/MiniCPM-V-2_6` (8B params, Qwen2 LLM + SigLIP vision). `FORCE_4BIT = True` flag forces 4-bit NF4 regardless of VRAM (set `False` for L4/A100 deployment). VRAM-aware strategy: 4-bit NF4 (bitsandbytes, `bnb_4bit_use_double_quant=True`, ~4.5 GB) for <22 GB VRAM; bf16/fp16 for ≥22 GB VRAM; fp32 on CPU. Thread-timeout: 120s GPU / 900s CPU. `sampling=False` (greedy). Falls back to omitting `system_prompt` kwarg on older releases (`TypeError` retry). HF_TOKEN **required** — raises `EnvironmentError` at load time if missing. Four transformers 5.x compatibility patches applied at load time in `_load()`:
-1. `PreTrainedModel.all_tied_weights_keys` — set to `{}` if missing/wrong type (transformers 5.x expects a dict; MiniCPMV's `trust_remote_code` skips the `super().__init__()` path that sets it)
-2. `dtype` kwarg — uses `dtype=` not `torch_dtype=` for model loading (API compatibility)
-3. Tokenizer attribute patch — adds `im_start_id`, `im_end_id`, `slice_start_id`, `slice_end_id` to the fast tokenizer via `convert_tokens_to_ids` (newer `processing_minicpmv.py` accesses these directly)
-4. Processor pre-load — explicitly loads `AutoProcessor` and patches its internal tokenizer before first `model.chat()` call (prevents lazy-load missing the patch window)
+**ChandraOCR** (`core/chandra_ocr_engine.py`) — **ACTIVE**. Model: `datalab-to/chandra-ocr-2` (5B params, BF16). State-of-the-art OCR, 90+ languages including Hindi/Devanagari. No HF_TOKEN required (public model, Apache 2.0 code license). Uses `chandra-ocr[hf]` library: `AutoModelForImageTextToText` + `generate_hf` + `parse_markdown`. `prompt_type="ocr_layout"` for structured extraction. bf16 on GPU, fp32 on CPU. Thread-timeout: 120s GPU / 600s CPU. Install: `pip install chandra-ocr[hf]`.
+
+**MiniCPM-V** (`core/minicpm_v_engine.py`) — commented out. Model: `openbmb/MiniCPM-V-2_6` (8B params, Qwen2 LLM + SigLIP vision). `FORCE_4BIT = True` flag forces 4-bit NF4 regardless of VRAM (set `False` for L4/A100 deployment). VRAM-aware strategy: 4-bit NF4 (bitsandbytes, `bnb_4bit_use_double_quant=True`, ~4.5 GB) for <22 GB VRAM; bf16/fp16 for ≥22 GB VRAM; fp32 on CPU. Thread-timeout: 120s GPU / 900s CPU. HF_TOKEN **required** — raises `EnvironmentError` at load time if missing. Four transformers 5.x compatibility patches applied at load time in `_load()`:
+1. `PreTrainedModel.all_tied_weights_keys` — set to `{}` if missing/wrong type
+2. `dtype` kwarg — uses `dtype=` not `torch_dtype=` for model loading
+3. Tokenizer attribute patch — adds `im_start_id`, `im_end_id`, `slice_start_id`, `slice_end_id` via `convert_tokens_to_ids`
+4. Processor pre-load — patches internal tokenizer before first `model.chat()` call
 
 **SmolVLM2-2.2B** (`core/smolvlm_engine.py`) — commented out (local testing). Model: `HuggingFaceTB/SmolVLM2-2.2B-Instruct` (SigLIP vision + SmolLM2 LM, 2.2B params). ~4.5 GB download, no HF_TOKEN required. fp16 on CUDA (~5 GB VRAM), fp32 on CPU. Uses `AutoModelForImageTextToText` (transformers 5.x) with `AutoModelForVision2Seq` fallback for 4.x. Thread-timeout: 120s GPU / 600s CPU. Decodes only newly generated tokens (strips prompt echo via `generated_ids[:, input_ids.shape[1]:]`). Weaker on Hindi/Devanagari than MiniCPM-V. Requires `num2words` (`pip install num2words`).
 
@@ -209,7 +213,7 @@ GET    /voter/export            # Export CSV; filters: name, mobile, epic, assem
 1. `POST /ocr/upload` — HEIC/HEIF converted to JPEG (quality=95), uploaded to Supabase Storage at `{user_id}/{job_id}/{uuid}.{ext}`, Job row created with `status="pending"` and `is_cropped` flag.
 2. Worker polls every 3s; picks oldest pending job → marks `processing`.
 3. Image preprocessing: if `is_cropped=True` uses as-is; otherwise `crop_rois()` extracts `[0:25%h, 0:60%w]` (structured data) + `[25%h:55%h, :]` (form/mobile section) and concatenates vertically.
-4. **Current active engine — MiniCPM-V-2_6** (`core/minicpm_v_engine.py`): runs the 8B MiniCPM-V VLM on the preprocessed image, returns HTML/Markdown. The prompt instructs the model to extract EPIC card fields and return them as an HTML table with labels in `<th>` cells and values in `<td>` cells — this is what `parse_smart()` expects.
+4. **Current active engine — ChandraOCR** (`core/chandra_ocr_engine.py`): runs `datalab-to/chandra-ocr-2` (5B VLM) on the preprocessed image using `prompt_type="ocr_layout"`, returns Markdown/HTML via `parse_markdown()` — compatible with `parse_smart()`.
 5. Parsing is **currently disabled** — job is saved with `{raw_text}` only (no `parsed` field) while output format is being verified.
 6. Job updated to `completed` with `{raw_text}` or `failed` with `error_message`.
 
@@ -232,7 +236,7 @@ SUPABASE_SERVICE_ROLE_KEY       # Supabase service role key
 SARVAM_BASE_URL                 # Sarvam AI API endpoint (disabled — Sarvam engine commented out)
 SARVAM_API_KEY                  # Sarvam AI authentication key (disabled)
 ANTHROPIC_API_KEY               # Claude API key (claude_parser.py — disabled in worker)
-HF_TOKEN                        # HuggingFace token — REQUIRED (active engine is MiniCPM-V-2_6, a gated model). Accept license at huggingface.co/openbmb/MiniCPM-V-2_6, create token at huggingface.co/settings/tokens. Engine raises EnvironmentError at load time if missing.
+HF_TOKEN                        # HuggingFace token — NOT required for active engine (chandra-ocr-2 is public). Still needed if switching back to MiniCPM-V-2_6 (gated model).
 PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True  # Skips PaddleOCR connectivity check — always set by main.py via os.environ.setdefault regardless of active engine
 ```
 
@@ -247,7 +251,7 @@ OMP_NUM_THREADS=1               # Prevents OpenMP thread oversubscription on App
 
 Current `render.yaml` defines a **single web service** (`eci-ocr-backend`) that runs both the FastAPI app and the embedded OCR worker daemon thread. Start command: `uvicorn app.main:app --host 0.0.0.0 --port 10000`.
 
-The active MiniCPM-V-2_6 engine requires a GPU instance on Render for practical inference speed. CPU-only inference is extremely slow (~5 min/image). `bitsandbytes` must be installed for GPUs with <22 GB VRAM (`FORCE_4BIT = True` in `minicpm_v_engine.py` forces 4-bit NF4 regardless; ~4.5 GB active VRAM). VRAM threshold for full bf16/fp16 is `vram >= 22` (line 112 of `minicpm_v_engine.py`).
+The active ChandraOCR engine (`datalab-to/chandra-ocr-2`, 5B params) benefits from a GPU but can run on CPU. Install `chandra-ocr[hf]` alongside the standard requirements. No `bitsandbytes` required unless switching back to MiniCPM-V.
 
 ## AWS Deployment
 
@@ -262,8 +266,8 @@ The active MiniCPM-V-2_6 engine requires a GPU instance on Render for practical 
 - **AMI**: "Deep Learning Base OSS Nvidia Driver GPU AMI" (AWS Marketplace) — ships with CUDA, cuDNN, PyTorch
 - **Storage**: ≥50 GB EBS gp3 — model weights alone are ~15 GB download + OS + venv
 - **Security group**: open inbound port 8000 (dev) / 10000 (prod)
-- **HF_TOKEN**: set in environment — MiniCPM-V-2_6 is a gated repo
-- **First boot**: model downloads ~15 GB on the first OCR job — call `warmup()` (defined in `core/minicpm_v_engine.py`) at startup to pre-load before traffic hits. Currently **not wired in `main.py`** — add `from app.core.minicpm_v_engine import warmup; warmup()` inside `start_worker()` to enable it.
+- **HF_TOKEN**: not required for active engine (chandra-ocr-2 is public)
+- **First boot**: model downloads on first job — call `warmup()` (defined in `core/chandra_ocr_engine.py`) at startup to pre-load. Currently **not wired in `main.py`** — add `from app.core.chandra_ocr_engine import warmup; warmup()` inside `start_worker()` to enable it.
 
 **Engine VRAM usage on L4 (24 GB):**
 - MiniCPM-V-2_6 bf16/fp16: ~16 GB — engine auto-selects bf16 (L4 supports it) since VRAM ≥ 22 GB (hardcoded threshold in `minicpm_v_engine.py` line 112)

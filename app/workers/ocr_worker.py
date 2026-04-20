@@ -17,8 +17,9 @@ from app.core.image_processing import (
 #
 # Engine           | Output          | Parser
 # ---------------- | --------------- | ----------------------------
+# ChandraOCR       | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE
 # SmolVLM-500M     | HTML/Markdown   | parse_smart(text)  (no db)
-# MiniCPM-V        | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE
+# MiniCPM-V        | HTML/Markdown   | parse_smart(text)  (no db)
 # PaddleOCR-VL     | HTML/Markdown   | parse_smart(text)  (no db)
 # Sarvam           | HTML            | parse_smart(text)  (no db)
 # PaddleOCR        | plain text      | parse_ocr_text(text, db)
@@ -27,8 +28,11 @@ from app.core.image_processing import (
 # -- SmolVLM-500M (local testing — low VRAM, weaker Hindi OCR) --
 # from app.core.smolvlm_engine import run_smolvlm
 
-# -- ACTIVE: MiniCPM-V-2_6 (8B VLM, strong multilingual OCR incl. Hindi) --
-from app.core.minicpm_v_engine import run_minicpm_v
+# -- ACTIVE: ChandraOCR — Qwen2.5-VL-3B-Instruct (3B VLM, Hindi + English) --
+from app.core.chandra_ocr_engine import run_chandra_ocr, warmup as chandra_warmup
+
+# -- MiniCPM-V-2_6 (8B VLM, strong multilingual OCR incl. Hindi) — needs GPU --
+# from app.core.minicpm_v_engine import run_minicpm_v
 
 # -- PaddleOCR-VL (0.9B VLM, 109 langs including Devanagari/Hindi) --
 # from app.core.paddleocr_vl_engine import run_paddleocr_vl
@@ -76,9 +80,9 @@ def process_job(job: Job, db: Session):
 
             processed = cv2.vconcat([top_left_resized, form_section_resized])
 
-        # 3. Run MiniCPM-V
-        print("🧠 Calling MiniCPM-V...")
-        ocr_text = run_minicpm_v(processed)
+        # 3. Run ChandraOCR
+        print("🧠 Calling ChandraOCR...")
+        ocr_text = run_chandra_ocr(processed)
         print("📄 OCR text received")
 
         # 4. Parse disabled — saving raw output only for inspection
@@ -115,6 +119,9 @@ def worker():
     sys.stderr.reconfigure(line_buffering=True)
 
     print("🚀 Worker started...", flush=True)
+
+    # Pre-load ChandraOCR model before picking up jobs
+    chandra_warmup()
 
     # Register signal handlers so PaddlePaddle's C++ backend gets a chance
     # to release resources before the process exits — prevents crashes on
