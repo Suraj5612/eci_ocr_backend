@@ -17,10 +17,10 @@ from app.core.image_processing import (
 #
 # Engine           | Output          | Parser
 # ---------------- | --------------- | ----------------------------
-# ChandraOCR       | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE
+# ChandraOCR       | HTML/Markdown   | parse_smart(text)  (no db)
 # SmolVLM-500M     | HTML/Markdown   | parse_smart(text)  (no db)
 # MiniCPM-V        | HTML/Markdown   | parse_smart(text)  (no db)
-# PaddleOCR-VL     | HTML/Markdown   | parse_smart(text)  (no db)
+# PaddleOCR-VL     | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE
 # Sarvam           | HTML            | parse_smart(text)  (no db)
 # PaddleOCR        | plain text      | parse_ocr_text(text, db)
 # ---------------------------------------------------------------------------
@@ -28,14 +28,14 @@ from app.core.image_processing import (
 # -- SmolVLM-500M (local testing — low VRAM, weaker Hindi OCR) --
 # from app.core.smolvlm_engine import run_smolvlm
 
-# -- ACTIVE: ChandraOCR — Qwen2.5-VL-3B-Instruct (3B VLM, Hindi + English) --
-from app.core.chandra_ocr_engine import run_chandra_ocr, warmup as chandra_warmup
+# -- ChandraOCR — datalab-to/chandra-ocr-2 (5B VLM, Hindi + English) --
+# from app.core.chandra_ocr_engine import run_chandra_ocr, warmup as chandra_warmup
 
 # -- MiniCPM-V-2_6 (8B VLM, strong multilingual OCR incl. Hindi) — needs GPU --
 # from app.core.minicpm_v_engine import run_minicpm_v
 
-# -- PaddleOCR-VL (0.9B VLM, 109 langs including Devanagari/Hindi) --
-# from app.core.paddleocr_vl_engine import run_paddleocr_vl
+# -- ACTIVE: PaddleOCR-VL (0.9B VLM, 109 langs including Devanagari/Hindi) --
+from app.core.paddleocr_vl_engine import run_paddleocr_vl
 
 # -- Sarvam OCR + HTML-aware smart parser (production) --
 # from app.core.sarvam import run_sarvam
@@ -80,9 +80,9 @@ def process_job(job: Job, db: Session):
 
             processed = cv2.vconcat([top_left_resized, form_section_resized])
 
-        # 3. Run ChandraOCR
-        print("🧠 Calling ChandraOCR...")
-        ocr_text = run_chandra_ocr(processed)
+        # 3. Run PaddleOCR-VL
+        print("🧠 Calling PaddleOCR-VL...")
+        ocr_text = run_paddleocr_vl(processed)
         print("📄 OCR text received")
 
         # 4. Parse disabled — saving raw output only for inspection
@@ -120,8 +120,7 @@ def worker():
 
     print("🚀 Worker started...", flush=True)
 
-    # Pre-load ChandraOCR model before picking up jobs
-    chandra_warmup()
+    # PaddleOCR-VL loads on first job — no explicit warmup needed
 
     # Register signal handlers so PaddlePaddle's C++ backend gets a chance
     # to release resources before the process exits — prevents crashes on
