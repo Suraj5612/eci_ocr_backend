@@ -19,8 +19,9 @@ from app.core.image_processing import (
 # ---------------- | --------------- | ----------------------------
 # ChandraOCR       | HTML/Markdown   | parse_smart(text)  (no db)
 # SmolVLM-500M     | HTML/Markdown   | parse_smart(text)  (no db)
-# MiniCPM-V        | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE
+# MiniCPM-V        | HTML/Markdown   | parse_smart(text)  (no db)
 # PaddleOCR-VL     | HTML/Markdown   | parse_smart(text)  (no db)
+# LightOnOCR-2     | plain text      | raw_text only               ← ACTIVE
 # Sarvam           | HTML            | parse_smart(text)  (no db)
 # PaddleOCR        | plain text      | parse_ocr_text(text, db)
 # ---------------------------------------------------------------------------
@@ -31,11 +32,14 @@ from app.core.image_processing import (
 # -- ChandraOCR — datalab-to/chandra-ocr-2 (5B VLM, Hindi + English) --
 # from app.core.chandra_ocr_engine import run_chandra_ocr, warmup as chandra_warmup
 
-# -- ACTIVE: MiniCPM-V-2_6 (8B VLM, strong multilingual OCR incl. Hindi) — needs GPU --
-from app.core.minicpm_v_engine import run_minicpm_v
+# -- MiniCPM-V-2_6 (8B VLM, strong multilingual OCR incl. Hindi) — needs GPU --
+# from app.core.minicpm_v_engine import run_minicpm_v
 
 # -- PaddleOCR-VL (0.9B VLM, 109 langs including Devanagari/Hindi) --
 # from app.core.paddleocr_vl_engine import run_paddleocr_vl
+
+# -- ACTIVE: LightOnOCR-2 (1B VLM, SOTA for 1B models) --
+from app.core.lighton_ocr_engine import run_lighton_ocr
 
 # -- Sarvam OCR + HTML-aware smart parser (production) --
 # from app.core.sarvam import run_sarvam
@@ -80,9 +84,9 @@ def process_job(job: Job, db: Session):
 
             processed = cv2.vconcat([top_left_resized, form_section_resized])
 
-        # 3. Run MiniCPM-V
-        print("🧠 Calling MiniCPM-V...")
-        ocr_text = run_minicpm_v(processed)
+        # 3. Run LightOnOCR-2
+        print("🧠 Calling LightOnOCR-2...")
+        ocr_text = run_lighton_ocr(processed)
         print("📄 OCR text received")
 
         # 4. Parse disabled — saving raw output only for inspection
