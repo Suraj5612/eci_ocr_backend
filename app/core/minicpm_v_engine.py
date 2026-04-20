@@ -167,6 +167,8 @@ def _load():
             ]:
                 if not hasattr(tok, _attr):
                     setattr(tok, _attr, tok.convert_tokens_to_ids(_tok_str))
+            if not hasattr(tok, "bos_id"):
+                tok.bos_id = tok.bos_token_id
 
         _patch_tokenizer(_tokenizer)
 
