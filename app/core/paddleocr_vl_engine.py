@@ -84,12 +84,6 @@ def run_paddleocr_vl(image: np.ndarray) -> str:
         tokenize=True,
         return_dict=True,
         return_tensors="pt",
-        images_kwargs={
-            "size": {
-                "shortest_edge": _processor.image_processor.min_pixels,
-                "longest_edge": 1280 * 28 * 28,
-            }
-        },
     ).to(_model.device)
 
     timeout = TIMEOUT_GPU if torch.cuda.is_available() else TIMEOUT_CPU
