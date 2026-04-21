@@ -89,13 +89,12 @@ def process_job(job: Job, db: Session):
         ocr_text = run_chandra_ocr(processed)
         print("📄 OCR text received")
 
-        # 4. Parse
+        # 4. Parse — always keep result even if name is missing
         parsed = parse_smart(ocr_text)
         if parsed.get("name", {}).get("value"):
             print("✅ Parser succeeded")
         else:
-            print("⚠️ Parser: name not found")
-            parsed = {}
+            print("⚠️ Parser: name not found (partial result saved)")
 
         # 5. Save result
         job.status = "completed"
