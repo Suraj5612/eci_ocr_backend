@@ -23,7 +23,7 @@ from chandra.output import parse_markdown
 
 MODEL_ID = "datalab-to/chandra-ocr-2"
 
-TIMEOUT_GPU = 120   # seconds
+TIMEOUT_GPU = 300   # seconds — 5B model; first inference can be slow on smaller GPUs
 TIMEOUT_CPU = 600   # seconds
 
 _model = None
@@ -73,11 +73,12 @@ def run_chandra_ocr(image: np.ndarray) -> str:
         if _model is None:
             _load()
 
-    print("🧠 Calling ChandraOCR (chandra-ocr-2)...")
+    on_gpu = torch.cuda.is_available()
+    print(f"🧠 Calling ChandraOCR (chandra-ocr-2) on {'GPU' if on_gpu else 'CPU'}...")
 
     pil_image = Image.fromarray(image[:, :, ::-1])  # BGR → RGB
 
-    timeout = TIMEOUT_GPU if torch.cuda.is_available() else TIMEOUT_CPU
+    timeout = TIMEOUT_GPU if on_gpu else TIMEOUT_CPU
 
     result: list[str] = []
     error: list[Exception] = []

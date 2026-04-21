@@ -285,15 +285,19 @@ def _normalise_state(v: str) -> str | None:
 def _mobile_from_pair(label: str, value: str) -> str | None:
     """
     Mobile number label: मोबाइल नंबर and OCR corruptions पीडाइल / पीडाइत नंबर.
+    Handles +91 / 91 country-code prefix (strips it before returning).
     """
     if not re.search(r"(?:मोबाइल|पीडाइल|पीडाइत)\s*नंबर", label):
         return None
-    # Try direct match first (clean number)
+    digits_only = re.sub(r"\s+", "", value)
+    # Country-code prefix: +91XXXXXXXXXX or 91XXXXXXXXXX → strip 91, return 10 digits
+    m = re.match(r"^\+?91([6-9]\d{9})$", digits_only)
+    if m:
+        return m.group(1)
+    # Clean 10-digit number (direct or with OCR-inserted spaces)
     m = re.search(r"\b([6-9]\d{9})\b", value)
     if m:
         return m.group(1)
-    # Strip OCR-inserted spaces and retry (e.g. "6137 5652 1980" → "613756521980")
-    digits_only = re.sub(r"\s+", "", value)
     m = re.search(r"([6-9]\d{9})", digits_only)
     if m and len(digits_only) == 10:
         return m.group(1)
