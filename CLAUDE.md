@@ -15,6 +15,9 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
+# chandra-ocr[hf] is NOT in requirements.txt — must be installed separately
+pip install chandra-ocr[hf]
+
 # CUDA PyTorch (RTX 4060 / cu128) — replaces the CPU torch from requirements.txt
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
@@ -214,7 +217,7 @@ GET    /voter/export            # Export CSV; filters: name, mobile, epic, assem
 2. Worker polls every 3s; picks oldest pending job → marks `processing`.
 3. Image preprocessing: if `is_cropped=True` uses as-is; otherwise `crop_rois()` extracts `[0:25%h, 0:60%w]` (structured data) + `[25%h:55%h, :]` (form/mobile section) and concatenates vertically.
 4. **Current active engine — ChandraOCR** (`core/chandra_ocr_engine.py`): runs `datalab-to/chandra-ocr-2` (5B VLM) on the preprocessed image using `prompt_type="ocr_layout"`, returns Markdown/HTML via `parse_markdown()` — compatible with `parse_smart()`.
-5. Parsing is **currently disabled** — job is saved with `{raw_text}` only (no `parsed` field) while output format is being verified.
+5. Parsing is **currently disabled** — job is saved with `{raw_text}` only (no `parsed` field). Root cause: `parse_smart` was designed for Sarvam's HTML output (tables with `<td>/<th>` cells), but ChandraOCR returns plain Markdown. The `smart_parser` `HTMLParser` finds no table cells in Markdown and returns empty fields. Re-enabling requires either adapting `smart_parser` to handle Markdown or post-processing ChandraOCR output into HTML tables first.
 6. Job updated to `completed` with `{raw_text}` or `failed` with `error_message`.
 
 **Previous production path (Sarvam + parse_smart, currently commented out):**
@@ -267,7 +270,7 @@ The active ChandraOCR engine (`datalab-to/chandra-ocr-2`, 5B params) benefits fr
 - **Storage**: ≥50 GB EBS gp3 — model weights alone are ~15 GB download + OS + venv
 - **Security group**: open inbound port 8000 (dev) / 10000 (prod)
 - **HF_TOKEN**: not required for active engine (chandra-ocr-2 is public)
-- **First boot**: model downloads on first job — call `warmup()` (defined in `core/chandra_ocr_engine.py`) at startup to pre-load. Currently **not wired in `main.py`** — add `from app.core.chandra_ocr_engine import warmup; warmup()` inside `start_worker()` to enable it.
+- **First boot**: model downloads on first job — `chandra_warmup()` is already called inside `ocr_worker.py` at worker startup (which runs as a daemon thread from `main.py`), so the model pre-loads before the first job arrives. No changes needed.
 
 **Engine VRAM usage on L4 (24 GB):**
 - MiniCPM-V-2_6 bf16/fp16: ~16 GB — engine auto-selects bf16 (L4 supports it) since VRAM ≥ 22 GB (hardcoded threshold in `minicpm_v_engine.py` line 112)
