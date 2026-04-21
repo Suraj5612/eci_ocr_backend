@@ -329,12 +329,18 @@ def _plain_text_section(raw: str) -> str:
     """
     Extract the portion of raw text BEFORE the first <table> tag.
     If no table is present, return the full text (strip HTML tags).
-    Also strips markdown bold/italic markers (**value**) so regexes see clean values.
+    Normalises Markdown artifacts so field regexes work cleanly:
+      - Strips HTML tags
+      - Strips ** bold markers
+      - Strips Markdown images ![alt](url) — prevents them bleeding into field values
+      - Normalises \n + leading whitespace → \n (same as _cells() for HTML)
     """
     idx = raw.find("<table")
     section = raw[:idx] if idx != -1 else raw
     text = _strip_html_tags(section)
-    text = re.sub(r"\*+", "", text)  # remove ** bold markers from Markdown output
+    text = re.sub(r"\*+", "", text)
+    text = re.sub(r"!\[[^\]]*\]\([^\)]*\)", "", text)  # strip Markdown images
+    text = re.sub(r"\n[ \t]+", "\n", text)              # normalise indented lines
     return text
 
 
