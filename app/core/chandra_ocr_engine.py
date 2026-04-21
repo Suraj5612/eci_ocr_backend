@@ -27,8 +27,7 @@ TIMEOUT_GPU = 300   # seconds — 5B model; first inference can be slow on small
 TIMEOUT_CPU = 600   # seconds
 
 _model = None
-_lock = threading.Lock()       # guards model loading
-_infer_lock = threading.Lock() # ensures only one generate_hf runs at a time
+_lock = threading.Lock()  # guards model loading only
 
 
 def _load():
@@ -61,7 +60,7 @@ def warmup():
 
 def _infer(pil_image: Image.Image) -> str:
     batch = [BatchInputItem(image=pil_image, prompt_type="ocr_layout")]
-    result = generate_hf(batch, _model)[0]
+    result = generate_hf(batch, _model, max_new_tokens=2048)[0]
     return parse_markdown(result.raw)
 
 
@@ -85,13 +84,10 @@ def run_chandra_ocr(image: np.ndarray) -> str:
     error: list[Exception] = []
 
     def _run():
-        # _infer_lock prevents a new inference from starting while a previous
-        # timed-out thread is still running generate_hf on the GPU.
-        with _infer_lock:
-            try:
-                result.append(_infer(pil_image))
-            except Exception as e:
-                error.append(e)
+        try:
+            result.append(_infer(pil_image))
+        except Exception as e:
+            error.append(e)
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
