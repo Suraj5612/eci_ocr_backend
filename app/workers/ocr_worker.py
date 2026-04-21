@@ -104,9 +104,14 @@ def process_job(job: Job, db: Session):
             if ac_hindi:
                 parsed["assembly_constituency"]["value"] = ac_hindi
                 parsed["assembly_constituency"]["confidence"] = 0.99
-            if district_hi and not parsed.get("district", {}).get("value"):
-                parsed.setdefault("district", {})["value"] = district_hi
-                parsed["district"]["confidence"] = 0.99
+                if district_hi and not parsed.get("district", {}).get("value"):
+                    parsed.setdefault("district", {})["value"] = district_hi
+                    parsed["district"]["confidence"] = 0.99
+            else:
+                # Resolver could not confirm (ambiguous or no match) — clear so
+                # the user knows to retake the image for a cleaner constituency scan
+                parsed["assembly_constituency"]["value"] = None
+                parsed["assembly_constituency"]["confidence"] = 0.0
 
         # 5. Save result
         job.status = "completed"

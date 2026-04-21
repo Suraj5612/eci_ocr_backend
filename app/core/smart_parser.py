@@ -494,7 +494,18 @@ def parse_smart(raw_html: str) -> dict:
         print(f"[smart_parser] HTML parse error: {e}")
         cells = []
 
-    # ── Pass 1: header cells (multi-field, \\n-delimited) ─────────────────
+    # ── Pass 1: plain-text pre-table section ──────────────────────────────
+    # Must run FIRST so Pattern B voter fields (name/EPIC/address/serial/…)
+    # are not overwritten by later-table cells that reuse the same labels
+    # (e.g. "पिछले SIR" section repeats निर्वाचक का नाम with the BLO's name).
+    # For Pattern A documents the pre-table section is just headers; the
+    # extractor finds nothing and the HTML passes below handle everything.
+    plain = _plain_text_section(raw_html)
+    plain_found = _extract_plain_fields(plain)
+    for key, val in plain_found.items():
+        fields[key] = val
+
+    # ── Pass 2: header cells (multi-field, \\n-delimited) ─────────────────
     for cell in cells:
         # Name cell: contains voter name label
         if any(kw in cell for kw in _NAME_KEYWORDS):
@@ -522,7 +533,7 @@ def parse_smart(raw_html: str) -> dict:
         if "राज्य" in cell or "ज्या" in cell:
             fields["state"] = fields["state"] or _state_from_cell(cell)
 
-    # ── Pass 2: adjacent label→value cell pairs ────────────────────────────
+    # ── Pass 3: adjacent label→value cell pairs ────────────────────────────
     for i in range(len(cells) - 1):
         label, value = cells[i], cells[i + 1]
 
@@ -534,16 +545,6 @@ def parse_smart(raw_html: str) -> dict:
 
         if fields["state"] is None:
             fields["state"] = _state_from_pair(label, value)
-
-    # ── Pass 3: plain-text fallback for any still-missing fields ──────────
-    # Handles Pattern B (pre-table plain text) and covers what HTML passes miss.
-    missing = [k for k, v in fields.items() if v is None]
-    if missing:
-        plain = _plain_text_section(raw_html)
-        plain_found = _extract_plain_fields(plain)
-        for key in missing:
-            if key in plain_found:
-                fields[key] = plain_found[key]
 
     # ── Build output ───────────────────────────────────────────────────────
     epic   = fields["epic"]
