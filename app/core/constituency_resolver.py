@@ -34,20 +34,30 @@ def resolve_constituency(
 
     hindi_names = [r.constituency_hindi for r in rows]
 
-    result = process.extractOne(
+    top = process.extract(
         raw_value.strip(),
         hindi_names,
         scorer=fuzz.partial_ratio,
+        limit=5,
     )
-    if not result or result[1] < _MATCH_THRESHOLD:
+    if not top or top[0][1] < _MATCH_THRESHOLD:
         print(
             f"[constituency_resolver] no match for '{raw_value}' "
-            f"(best score: {result[1] if result else 0})"
+            f"(best score: {top[0][1] if top else 0})"
         )
         return None, None
 
-    matched_hindi = result[0]
-    score = result[1]
+    # If two or more results share the top score the OCR value is ambiguous
+    # (e.g. "लखनऊ" scores 100 for every "लखनऊ ..." constituency).
+    if len(top) >= 2 and top[1][1] == top[0][1]:
+        print(
+            f"[constituency_resolver] ambiguous '{raw_value}' "
+            f"— multiple matches tie at score {top[0][1]}, keeping null"
+        )
+        return None, None
+
+    matched_hindi = top[0][0]
+    score = top[0][1]
     constituency = next((r for r in rows if r.constituency_hindi == matched_hindi), None)
     if not constituency:
         return None, None
