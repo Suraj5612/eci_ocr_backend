@@ -40,8 +40,8 @@ _SERIAL_PREFIX = r"(?:क्रम|कम|कंप|कण|डम(?:रु)?|ब
 # भाग संख्या एवं नाम: unique trigger is "संख्या एवं"
 # (covered inline via `"संख्या एवं" in cell`)
 
-# विधानसभा / संसदीय निर्वाचन क्षेत्र: unique anchor is "क्षेत्र का"
-# (covered inline via `"क्षेत्र का" in cell`)
+# विधानसभा / संसदीय निर्वाचन क्षेत्र: anchors are "विधानसभा" / "निधानसभा" / "क्षेत्र का"
+# (covered inline)
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +217,7 @@ def _part_from_cell(cell: str) -> str | None:
         r"(?:भाग|पान|माप|चयन|ग्राम|वाम|नाम|माग|पाग|मांग|नाग|ब्लॉक)"
         r"\s*संख्या\s+(?:एवं\s+(?:नाम|भाग|गान)\s*)?:?\s*"
         r"(.+?)"
-        r"(?=\n(?:क्षेत्र\s*का|(?:राज्य|ज्या)\s*का|(?:क्रम|कम|कंप|कण|डम|ब्लॉक|ग्राम)\s*संख्या)|$)",
+        r"(?=\n(?:क्षेत्र\s*का|(?:राज्य|ज्या)\s*का|(?:क्रम|कम|कंप|कण|डम|ब्लॉक|ग्राम)\s*संख्या|(?:विधानसभा|निधानसभा|संसदीय))|$)",
         cell, re.DOTALL,
     )
     if not m:
@@ -238,12 +238,15 @@ def _part_from_cell(cell: str) -> str | None:
 def _constituency_from_cell(cell: str) -> str | None:
     """
     विधानसभा / संसदीय निर्वाचन क्षेत्र का नाम.
-    Trigger condition: cell contains 'क्षेत्र का'.
+    Trigger condition: cell contains 'विधानसभा' / 'निधानसभा' / 'क्षेत्र का'.
+    Handles two label forms:
+      - 'विधानसभा ... का नाम:' (e.g. 'विधानसभा / सरकारी निरीचन डीए का नाम:')
+      - 'क्षेत्र का नाम:' / 'क्षेत्र का माग:'
     Constituency value often spans two lines: 'लखनऊ\\nमध्य' → 'लखनऊ मध्य'.
-    OCR corruption: 'क्षेत्र का माग' for 'क्षेत्र का नाम'.
     """
     m = re.search(
-        r"क्षेत्र\s*का\s*(?:नाम|माग)\s*:?\s*(.+?)(?=\n(?:राज्य|ज्या)|$)",
+        r"(?:(?:विधानसभा|निधानसभा)[^:\n]*का\s*(?:नाम|माग)|क्षेत्र\s*का\s*(?:नाम|माग))"
+        r"\s*:?\s*(.+?)(?=\n(?:राज्य|ज्या)|$)",
         cell, re.DOTALL,
     )
     if not m:
@@ -406,7 +409,8 @@ def _extract_plain_fields(text: str) -> dict:
 
     # assembly_constituency
     m = re.search(
-        r"क्षेत्र\s*का\s*(?:नाम|माग)\s*:?\s*(.+?)(?=\n(?:राज्य|ज्या)|$)",
+        r"(?:(?:विधानसभा|निधानसभा)[^:\n]*का\s*(?:नाम|माग)|क्षेत्र\s*का\s*(?:नाम|माग))"
+        r"\s*:?\s*(.+?)(?=\n(?:राज्य|ज्या)|$)",
         text, re.DOTALL,
     )
     if m:
@@ -502,8 +506,8 @@ def parse_smart(raw_html: str) -> dict:
                 fields["part_number_and_name"] or _part_from_cell(cell)
             )
 
-        # Constituency cell (unique trigger: "क्षेत्र का")
-        if "क्षेत्र का" in cell:
+        # Constituency cell — label is either "विधानसभा ... का नाम" or "क्षेत्र का नाम"
+        if "विधानसभा" in cell or "निधानसभा" in cell or "क्षेत्र का" in cell:
             fields["assembly_constituency"] = (
                 fields["assembly_constituency"] or _constituency_from_cell(cell)
             )
