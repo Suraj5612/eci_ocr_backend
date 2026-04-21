@@ -43,7 +43,7 @@ from app.core.chandra_ocr_engine import run_chandra_ocr, warmup as chandra_warmu
 
 # -- Sarvam OCR + HTML-aware smart parser (production) --
 # from app.core.sarvam import run_sarvam
-# from app.core.smart_parser import parse_smart
+from app.core.smart_parser import parse_smart
 
 # -- Classic PaddleOCR mobile models (local testing) --
 # from app.core.paddleocr_engine import run_paddleocr
@@ -89,19 +89,19 @@ def process_job(job: Job, db: Session):
         ocr_text = run_chandra_ocr(processed)
         print("📄 OCR text received")
 
-        # 4. Parse disabled — saving raw output only for inspection
-        # Uncomment once output format is confirmed to match smart_parser expectations
-        # parsed = parse_smart(ocr_text)
-        # if parsed.get("name", {}).get("value"):
-        #     print("✅ Parser succeeded")
-        # else:
-        #     print("⚠️ Parser: name not found")
-        #     parsed = {}
+        # 4. Parse
+        parsed = parse_smart(ocr_text)
+        if parsed.get("name", {}).get("value"):
+            print("✅ Parser succeeded")
+        else:
+            print("⚠️ Parser: name not found")
+            parsed = {}
 
-        # 5. Save result (raw only)
+        # 5. Save result
         job.status = "completed"
         job.result = {
             "raw_text": ocr_text,
+            "parsed": parsed,
         }
 
     except Exception as e:

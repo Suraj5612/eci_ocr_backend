@@ -1,24 +1,46 @@
 """
 HTML-aware voter card OCR parser.
 
-Built from analysis of 18 real Sarvam OCR outputs for Indian EPIC (voter) cards.
-Understands the two-column HTML table structure Sarvam produces:
+Built from analysis of 43 real ChandraOCR outputs for Indian EPIC (voter) cards
+(गणना प्रपत्र). Handles two structural patterns:
 
-  Left header cell:   निर्वाचक का नाम / ईपीआईसी / पता
-  Right header cell:  कण संख्या / भाग संख्या एवं नाम / विधानसभा / राज्य
-  Body label rows:    <td>label</td> <td>value</td>  (mobile, district, etc.)
+  Pattern A (HTML table):
+    Left <td>:   voter name, EPIC, address (newline-separated, often with <br/>)
+    Right <td>:  serial#, part# + name, constituency, state
+    Later tables: DOB, Aadhaar, mobile, father/mother/spouse names
 
-Output shape is identical to the Claude parser:
+  Pattern B (plain text):
+    Primary data appears as "label: value\\n" lines BEFORE any <table> tag.
+    Later tables still contain supplemental data.
+
+Output shape:
   {"name": {"value": "...", "confidence": 0.95}, ...}
 """
 
 import re
 from html.parser import HTMLParser
 
-# OCR variant keywords — क्रम is commonly corrupted to कण or कम by Sarvam
-_SERIAL_KEYWORDS = ("कण संख्या", "क्रम संख्या", "कम संख्या")
-# विधानसभा is commonly corrupted to निधानसभा by Sarvam
-_CONSTITUENCY_KEYWORDS = ("विधानसभा", "निधानसभा", "निर्वाचन क्षेत्र का नाम")
+
+# ---------------------------------------------------------------------------
+# OCR variant keyword sets (updated for ChandraOCR corruption patterns)
+# ---------------------------------------------------------------------------
+
+# निर्वाचक is commonly corrupted to निरीचक / निवासक / निवाँधक
+_NAME_KEYWORDS = (
+    "निर्वाचक का नाम",
+    "निरीचक का नाम",
+    "निवासक का नाम",
+    "निवाँधक का नाम",
+)
+
+# क्रम संख्या corruptions: क्रम→कण, कम, कंप, डम, डमरू, ब्लॉक, ग्राम
+_SERIAL_PREFIX = r"(?:क्रम|कम|कंप|कण|डम(?:रु)?|ब्लॉक|ग्राम)"
+
+# भाग संख्या एवं नाम: unique trigger is "संख्या एवं"
+# (covered inline via `"संख्या एवं" in cell`)
+
+# विधानसभा / संसदीय निर्वाचन क्षेत्र: unique anchor is "क्षेत्र का"
+# (covered inline via `"क्षेत्र का" in cell`)
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +62,7 @@ class _CellExtractor(HTMLParser):
             self._buf = []
         elif tag == "br" and self._buf is not None:
             self._buf.append("\n")
+        # <b> and <del> are pass-through: data is captured by handle_data()
 
     def handle_endtag(self, tag):
         if tag in self._CELL_TAGS and self._buf is not None:
@@ -67,6 +90,7 @@ _EPIC_PATTERNS = [
     r"^[A-Z]\d{8}$",                # D06440929
     r"^[A-Z]{2}/\d{7}$",            # XG/0739631
     r"^[A-Z]{2}/\d+/\d+/\d{6,8}$", # UP/20/102/0732650
+    r"^\d{9,10}$",                  # 1002345429, 0034109129 (pure-digit EPICs)
 ]
 
 
@@ -82,19 +106,34 @@ def _normalise_epic(raw: str) -> str | None:
     return s if _valid_epic(s) else None
 
 
+def _strip_markdown(v: str) -> str:
+    """Remove common markdown formatting artifacts (*bold*, **bold**, etc.)."""
+    v = re.sub(r"\*+", "", v)
+    v = re.sub(r"~~[^~]*~~", "", v)
+    v = re.sub(r"`[^`]*`", "", v)
+    return v.strip()
+
+
 # ---------------------------------------------------------------------------
 # Field extractors — header-cell (multi-field, \\n-separated)
 # ---------------------------------------------------------------------------
 
 def _name_from_cell(cell: str) -> str | None:
-    # Require at least one non-whitespace, non-colon character after the label
-    m = re.search(r"निर्वाचक\s*का\s*नाम\s*:\s*([^:\n][^\n]*)", cell)
+    """
+    Voter name label with OCR corruption variants:
+    निर्वाचक / निरीचक / निवासक / निवाँधक का नाम
+    """
+    m = re.search(
+        r"(?:निर्वाचक|निरीचक|निवासक|निवाँधक)\s*का\s*नाम\s*:\s*([^:\n][^\n]*)",
+        cell,
+    )
     if not m:
         return None
-    v = re.sub(r"\s+", " ", m.group(1)).strip()
+    v = re.sub(r"\s+", " ", m.group(1)).strip("* \t")
+    v = _strip_markdown(v)
     if not v or v == ":":
         return None
-    # Guard: if the value looks like a sentence (>5 words) it's OCR bleed
+    # Guard: if the value looks like a sentence (>4 words) it's OCR bleed
     words = v.split()
     return " ".join(words[:4]) if len(words) > 4 else v
 
@@ -107,6 +146,8 @@ def _epic_from_cell(cell: str) -> str | None:
     Labelled values are trusted even when format validation fails (e.g. OCR
     reads letters as digits: 'OO84713903' → '0084713903').
     Bare token scan uses strict format validation.
+
+    Handles spaced EPICs: MCG 0982678, HJ N2044502, XGF 1797 140.
     """
     if "यदि उपलब्ध हो" in cell:
         return None
@@ -115,12 +156,11 @@ def _epic_from_cell(cell: str) -> str | None:
     m = re.search(r"ईपीआईसी\s*:\s*([A-Z0-9][A-Z0-9/\.\- ]+)", cell, re.IGNORECASE)
     if m:
         raw = m.group(1).strip()
-        # Remove OCR-inserted spaces, normalise dot→slash
         raw = re.sub(r"\s+", "", raw).upper().replace(".", "/").rstrip("/.-")
-        if len(raw) >= 6:          # sanity: at least 6 chars
+        if len(raw) >= 6:
             return raw
 
-    # Bare token scan — strict format validation (no label to anchor on)
+    # Bare token scan — strict format validation
     for token in re.findall(r"\b([A-Z]{1,3}[0-9/\.]{6,}[0-9])\b", cell):
         result = _normalise_epic(token)
         if result:
@@ -132,59 +172,94 @@ def _epic_from_cell(cell: str) -> str | None:
 def _address_from_cell(cell: str) -> str | None:
     """
     Address starts after पता: and runs until the next field label or end of cell.
-    Multi-line continuation lines (no label) are included.
+    Lookahead covers serial/part/constituency/state labels and their corruptions.
     """
     m = re.search(
-        r"पता\s*:\s*(.+?)(?=\nनिर्वाचक|\nईपीआईसी|\nकण|\nक्रम|\nभाग|\nविधानसभा|\nराज्य|$)",
+        r"पता\s*:\s*(.+?)"
+        r"(?=\n(?:"
+        r"(?:निर्वाचक|निरीचक|निवासक|निवाँधक)\s*का\s*नाम"
+        r"|ईपीआईसी"
+        r"|(?:क्रम|कम|कंप|कण|डम|ब्लॉक|ग्राम)\s*संख्या"
+        r"|(?:भाग|पान|माप|चयन|ग्राम|वाम|नाम|माग|पाग|मांग|नाग|ब्लॉक)\s*संख्या"
+        r"|क्षेत्र\s*का"
+        r"|(?:राज्य|ज्या)\s*का"
+        r")|$)",
         cell, re.DOTALL,
     )
     if not m:
         return None
     v = re.sub(r"\n+", " ", m.group(1))
-    v = re.sub(r"\s+", " ", v).strip()
+    v = re.sub(r"\s+", " ", v).strip("* \t")
+    v = _strip_markdown(v)
     return v if len(v) > 5 else None
 
 
 def _serial_from_cell(cell: str) -> str | None:
-    # कण संख्या / क्रम संख्या / कम संख्या (OCR variants of क्रम)
-    m = re.search(r"(?:कण|क्रम|कम)\s*संख्या\s*:?\s*(\d+)", cell)
+    """
+    क्रम संख्या and all OCR corruption variants:
+    क्रम, कम, कंप, कण, डम, डमरू, ब्लॉक, ग्राम
+    """
+    m = re.search(_SERIAL_PREFIX + r"\s*संख्या\s*:?\s*(\d+)", cell)
     return m.group(1) if m else None
 
 
 def _part_from_cell(cell: str) -> str | None:
     """
-    Handles correct label (एवं नाम) and OCR error variant (एवं भाग).
+    भाग संख्या एवं नाम (and OCR corruption variants for भाग prefix and नाम suffix).
+    Trigger condition: cell contains 'संख्या एवं' (unique to this field).
+    Prefix variants: भाग, पान, माप, चयन, ग्राम, वाम, नाम, माग, पाग, मांग, नाग, ब्लॉक
+    Suffix variants: नाम, भाग, गान
     Value runs until the next field label or end of cell.
     """
     m = re.search(
-        r"भाग\s*संख्या\s*(?:एवं\s*(?:नाम|भाग)\s*)?:?\s*(.+?)(?=\nविधानसभा|\nराज्य|\nकण|\nक्रम|$)",
+        r"(?:भाग|पान|माप|चयन|ग्राम|वाम|नाम|माग|पाग|मांग|नाग|ब्लॉक)"
+        r"\s*संख्या\s+(?:एवं\s+(?:नाम|भाग|गान)\s*)?:?\s*"
+        r"(.+?)"
+        r"(?=\n(?:क्षेत्र\s*का|(?:राज्य|ज्या)\s*का|(?:क्रम|कम|कंप|कण|डम|ब्लॉक|ग्राम)\s*संख्या)|$)",
         cell, re.DOTALL,
     )
     if not m:
+        # Fallback: old-style भाग संख्या without एवं (e.g. "भाग संख्या: 123 मध्य")
+        m = re.search(
+            r"भाग\s*संख्या\s*:?\s*(.+?)"
+            r"(?=\n(?:क्षेत्र\s*का|(?:राज्य|ज्या)\s*का|(?:क्रम|कम|कंप|कण|डम|ब्लॉक|ग्राम)\s*संख्या)|$)",
+            cell, re.DOTALL,
+        )
+    if not m:
         return None
     v = re.sub(r"\n+", " ", m.group(1))
-    v = re.sub(r"\s+", " ", v).strip()
+    v = re.sub(r"\s+", " ", v).strip("* \t")
+    v = _strip_markdown(v)
     return v if v else None
 
 
 def _constituency_from_cell(cell: str) -> str | None:
-    # Capture everything from the label up to the state label (or end of cell).
-    # निधानसभा is a common OCR corruption of विधानसभा.
+    """
+    विधानसभा / संसदीय निर्वाचन क्षेत्र का नाम.
+    Trigger condition: cell contains 'क्षेत्र का'.
+    Constituency value often spans two lines: 'लखनऊ\\nमध्य' → 'लखनऊ मध्य'.
+    OCR corruption: 'क्षेत्र का माग' for 'क्षेत्र का नाम'.
+    """
     m = re.search(
-        r"(?:विधानसभा|निधानसभा)\s*/?\s*संसदीय\s*निर्वाचन\s*क्षेत्र\s*(?:का\s*नाम)?\s*:?\s*"
-        r"(.+?)(?=\nराज्य\s*(?:का\s*नाम)?|$)",
+        r"क्षेत्र\s*का\s*(?:नाम|माग)\s*:?\s*(.+?)(?=\n(?:राज्य|ज्या)|$)",
         cell, re.DOTALL,
     )
     if not m:
         return None
-    # Join continuation lines (handles "लखनऊ\nमध्य", "लखनऊ\nउत्तर", etc.)
     v = re.sub(r"\n+", " ", m.group(1))
-    v = re.sub(r"\s+", " ", v).strip()
+    v = re.sub(r"\s+", " ", v).strip("* \t")
+    v = _strip_markdown(v)
     return v if v else None
 
 
 def _state_from_cell(cell: str) -> str | None:
-    m = re.search(r"राज्य\s*(?:का\s*नाम)?\s*:?\s*([^\n<]+)", cell)
+    """
+    राज्य का नाम (and OCR corruption ज्या का नाम).
+    """
+    m = re.search(r"(?:राज्य|ज्या)\s*का\s*नाम\s*:?\s*([^\n<]+)", cell)
+    if not m:
+        # Fallback: shorter form राज्य:
+        m = re.search(r"(?:राज्य|ज्या)\s*:?\s*([^\n<]+)", cell)
     if not m:
         return None
     return _normalise_state(m.group(1).strip())
@@ -194,7 +269,6 @@ def _normalise_state(v: str) -> str | None:
     abbrevs = {"UP", "U.P.", "U.P", "उ0. पु0", "उ0.पु0", "UTTAR PRADESH"}
     if v.upper().strip().rstrip(".") in {a.upper().rstrip(".") for a in abbrevs}:
         return "उत्तर प्रदेश"
-    # Keep only Hindi script + spaces
     cleaned = re.sub(r"[^ऀ-ॿA-Za-z\s]", "", v).strip()
     return cleaned if cleaned else None
 
@@ -204,7 +278,10 @@ def _normalise_state(v: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _mobile_from_pair(label: str, value: str) -> str | None:
-    if not re.search(r"मोबाइल\s*नंबर", label):
+    """
+    Mobile number label: मोबाइल नंबर and OCR corruptions पीडाइल / पीडाइत नंबर.
+    """
+    if not re.search(r"(?:मोबाइल|पीडाइल|पीडाइत)\s*नंबर", label):
         return None
     # Try direct match first (clean number)
     m = re.search(r"\b([6-9]\d{9})\b", value)
@@ -213,14 +290,12 @@ def _mobile_from_pair(label: str, value: str) -> str | None:
     # Strip OCR-inserted spaces and retry (e.g. "6137 5652 1980" → "613756521980")
     digits_only = re.sub(r"\s+", "", value)
     m = re.search(r"([6-9]\d{9})", digits_only)
-    # Only return if exactly 10 digits matched (not a longer OCR artifact)
     if m and len(digits_only) == 10:
         return m.group(1)
     return None
 
 
 def _district_from_pair(label: str, value: str) -> str | None:
-    # जिला: or जिल्हा: (OCR variant)
     if re.search(r"^जिल", label.strip()):
         v = value.strip()
         return v if v and v not in ("—", "–", "-", "") else None
@@ -228,10 +303,136 @@ def _district_from_pair(label: str, value: str) -> str | None:
 
 
 def _state_from_pair(label: str, value: str) -> str | None:
-    if re.search(r"राज्य\s*(?:का\s*नाम)?", label):
+    if re.search(r"(?:राज्य|ज्या)\s*(?:का\s*नाम)?", label):
         v = value.strip()
         return _normalise_state(v) if v and v not in ("—", "–") else None
     return None
+
+
+# ---------------------------------------------------------------------------
+# Plain-text fallback pass (Pattern B — pre-table content)
+# ---------------------------------------------------------------------------
+
+def _strip_html_tags(text: str) -> str:
+    """Remove HTML tags and normalise whitespace."""
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return text
+
+
+def _plain_text_section(raw: str) -> str:
+    """
+    Extract the portion of raw text BEFORE the first <table> tag.
+    If no table is present, return the full text (strip HTML tags).
+    Also strips markdown bold/italic markers (**value**) so regexes see clean values.
+    """
+    idx = raw.find("<table")
+    section = raw[:idx] if idx != -1 else raw
+    text = _strip_html_tags(section)
+    text = re.sub(r"\*+", "", text)  # remove ** bold markers from Markdown output
+    return text
+
+
+def _extract_plain_fields(text: str) -> dict:
+    """
+    Apply regex extraction to plain-text section for all 9 fields.
+    Returns a dict with non-None values only.
+    """
+    found: dict = {}
+
+    # name
+    m = re.search(
+        r"(?:निर्वाचक|निरीचक|निवासक|निवाँधक)\s*का\s*नाम\s*:?\s*([^\n:]+)",
+        text,
+    )
+    if m:
+        v = re.sub(r"\s+", " ", m.group(1)).strip("* \t")
+        v = _strip_markdown(v)
+        if v:
+            words = v.split()
+            found["name"] = " ".join(words[:4]) if len(words) > 4 else v
+
+    # EPIC (labelled)
+    m = re.search(
+        r"ईपीआईसी\s*:?\s*([A-Z0-9][A-Z0-9/\.\- ]{4,})",
+        text, re.IGNORECASE,
+    )
+    if m and "यदि उपलब्ध हो" not in text[max(0, m.start() - 30): m.start()]:
+        raw = re.sub(r"\s+", "", m.group(1)).upper().replace(".", "/").rstrip("/.-")
+        if len(raw) >= 6:
+            found["epic"] = raw
+
+    # address
+    serial_lookahead = (
+        r"(?:क्रम|कम|कंप|कण|डम|ब्लॉक|ग्राम)\s*संख्या"
+        r"|(?:भाग|पान|माप|चयन|ग्राम|वाम|नाम|माग|पाग|मांग|नाग|ब्लॉक)\s*संख्या"
+        r"|(?:विधान|निर्वाचन)"
+        r"|(?:राज्य|ज्या)"
+        r"|ईपीआईसी"
+        r"|(?:मोबाइल|पीडाइल|पीडाइत)\s*नंबर"
+        r"|जन्म"
+    )
+    m = re.search(
+        r"पता\s*:\s*(.+?)(?=\n(?:" + serial_lookahead + r")|$)",
+        text, re.DOTALL,
+    )
+    if m:
+        v = re.sub(r"\n+", " ", m.group(1))
+        v = re.sub(r"\s+", " ", v).strip("* \t")
+        v = _strip_markdown(v)
+        if len(v) > 5:
+            found["address"] = v
+
+    # serial_number
+    m = re.search(_SERIAL_PREFIX + r"\s*संख्या\s*:\s*(\d+)", text)
+    if m:
+        found["serial_number"] = m.group(1)
+
+    # part_number_and_name
+    m = re.search(
+        r"(?:भाग|पान|माप|चयन|ग्राम|वाम|नाम|माग|पाग|मांग|नाग|ब्लॉक)"
+        r"\s*संख्या\s+(?:एवं\s+(?:नाम|भाग|गान)\s*)?:\s*(.+?)"
+        r"(?=\n(?:विधान|निर्वाचन|राज्य|ज्या|रीड|जन्म|आधार|(?:मोबाइल|पीडाइल|पीडाइत)\s*नंबर)|$)",
+        text, re.DOTALL,
+    )
+    if m:
+        v = re.sub(r"\n+", " ", m.group(1))
+        v = re.sub(r"\s+", " ", v).strip("* \t")
+        v = _strip_markdown(v)
+        if v:
+            found["part_number_and_name"] = v
+
+    # assembly_constituency
+    m = re.search(
+        r"क्षेत्र\s*का\s*(?:नाम|माग)\s*:?\s*(.+?)(?=\n(?:राज्य|ज्या)|$)",
+        text, re.DOTALL,
+    )
+    if m:
+        v = re.sub(r"\n+", " ", m.group(1))
+        v = re.sub(r"\s+", " ", v).strip("* \t")
+        v = _strip_markdown(v)
+        if v:
+            found["assembly_constituency"] = v
+
+    # state
+    m = re.search(r"(?:राज्य|ज्या)\s*का\s*नाम\s*:?\s*([^\n]+)", text)
+    if m:
+        v = _normalise_state(m.group(1).strip())
+        if v:
+            found["state"] = v
+
+    # mobile
+    m = re.search(
+        r"(?:मोबाइल|पीडाइल|पीडाइत)\s*नंबर\s*[:\-—]?\s*(?:\n[\s\n]*)?"
+        r"([6-9][\d ]{9,12})",
+        text,
+    )
+    if m:
+        raw = re.sub(r"\s+", "", m.group(1))
+        if len(raw) == 10:
+            found["mobile"] = raw
+
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +460,11 @@ def _fmt(value, confidence: float) -> dict:
 
 def parse_smart(raw_html: str) -> dict:
     """
-    Parse raw Sarvam OCR HTML string into structured voter-card fields.
+    Parse raw ChandraOCR output (HTML+Markdown) into structured voter-card fields.
+
+    Handles both structural patterns:
+      Pattern A: primary data in HTML table cells
+      Pattern B: primary data as plain "label: value" lines before any <table>
 
     Returns a dict with the same shape as the Claude parser output:
       {"name": {"value": "...", "confidence": 0.95}, ...}
@@ -274,26 +479,35 @@ def parse_smart(raw_html: str) -> dict:
     try:
         cells = _cells(raw_html)
     except Exception as e:
-        print(f"❌ smart_parser: HTML parse error: {e}")
+        print(f"[smart_parser] HTML parse error: {e}")
         cells = []
 
     # ── Pass 1: header cells (multi-field, \\n-delimited) ─────────────────
     for cell in cells:
-        if "निर्वाचक का नाम" in cell:
+        # Name cell: contains voter name label
+        if any(kw in cell for kw in _NAME_KEYWORDS):
             fields["name"]    = fields["name"]    or _name_from_cell(cell)
             fields["epic"]    = fields["epic"]    or _epic_from_cell(cell)
             fields["address"] = fields["address"] or _address_from_cell(cell)
 
-        if any(kw in cell for kw in _SERIAL_KEYWORDS):
+        # Serial number cell
+        if re.search(_SERIAL_PREFIX + r"\s*संख्या", cell):
             fields["serial_number"] = fields["serial_number"] or _serial_from_cell(cell)
 
-        if "भाग संख्या" in cell:
-            fields["part_number_and_name"] = fields["part_number_and_name"] or _part_from_cell(cell)
+        # Part number + name cell (unique trigger: "संख्या एवं")
+        if "संख्या एवं" in cell:
+            fields["part_number_and_name"] = (
+                fields["part_number_and_name"] or _part_from_cell(cell)
+            )
 
-        if any(kw in cell for kw in _CONSTITUENCY_KEYWORDS):
-            fields["assembly_constituency"] = fields["assembly_constituency"] or _constituency_from_cell(cell)
+        # Constituency cell (unique trigger: "क्षेत्र का")
+        if "क्षेत्र का" in cell:
+            fields["assembly_constituency"] = (
+                fields["assembly_constituency"] or _constituency_from_cell(cell)
+            )
 
-        if "राज्य" in cell:
+        # State cell (राज्य or OCR corruption ज्या)
+        if "राज्य" in cell or "ज्या" in cell:
             fields["state"] = fields["state"] or _state_from_cell(cell)
 
     # ── Pass 2: adjacent label→value cell pairs ────────────────────────────
@@ -309,9 +523,19 @@ def parse_smart(raw_html: str) -> dict:
         if fields["state"] is None:
             fields["state"] = _state_from_pair(label, value)
 
+    # ── Pass 3: plain-text fallback for any still-missing fields ──────────
+    # Handles Pattern B (pre-table plain text) and covers what HTML passes miss.
+    missing = [k for k, v in fields.items() if v is None]
+    if missing:
+        plain = _plain_text_section(raw_html)
+        plain_found = _extract_plain_fields(plain)
+        for key in missing:
+            if key in plain_found:
+                fields[key] = plain_found[key]
+
     # ── Build output ───────────────────────────────────────────────────────
-    epic = fields["epic"]
-    name = fields["name"]
+    epic   = fields["epic"]
+    name   = fields["name"]
     mobile = fields["mobile"]
 
     return {
@@ -323,7 +547,7 @@ def parse_smart(raw_html: str) -> dict:
         "epic": _fmt(epic, _score(
             epic,
             format_valid=_valid_epic(epic or ""),
-            label_match=True,   # label was present regardless of format
+            label_match=True,
         )),
         "mobile": _fmt(mobile, _score(
             mobile,
