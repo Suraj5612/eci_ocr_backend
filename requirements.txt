@@ -28,7 +28,6 @@ Pillow
 paddleocr
 paddlepaddle
 
-# VLM-based OCR engines (MiniCPM-V + PaddleOCR-VL)
 transformers>=5.0.0
 sentencepiece          # MiniCPM-V tokenizer
 timm                   # MiniCPM-V vision encoder (SigLIP)
@@ -40,4 +39,5 @@ num2words              # required by SmolVLM2 processor
 torch
 torchvision
 einops
+accelerate
 accelerate
