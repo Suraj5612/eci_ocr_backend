@@ -78,7 +78,8 @@ class _CellExtractor(HTMLParser):
 def _cells(html: str) -> list[str]:
     p = _CellExtractor()
     p.feed(html)
-    return p.cells
+    # Normalize indentation inside cells: \n + spaces → \n so lookaheads work
+    return [re.sub(r"\n[ \t]+", "\n", cell).strip() for cell in p.cells]
 
 
 # ---------------------------------------------------------------------------

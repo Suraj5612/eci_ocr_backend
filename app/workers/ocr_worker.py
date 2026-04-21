@@ -44,6 +44,7 @@ from app.core.chandra_ocr_engine import run_chandra_ocr, warmup as chandra_warmu
 # -- Sarvam OCR + HTML-aware smart parser (production) --
 # from app.core.sarvam import run_sarvam
 from app.core.smart_parser import parse_smart
+from app.core.constituency_resolver import resolve_constituency
 
 # -- Classic PaddleOCR mobile models (local testing) --
 # from app.core.paddleocr_engine import run_paddleocr
@@ -95,6 +96,17 @@ def process_job(job: Job, db: Session):
             print("✅ Parser succeeded")
         else:
             print("⚠️ Parser: name not found (partial result saved)")
+
+        # 4b. Resolve constituency against DB
+        ac_raw = parsed.get("assembly_constituency", {}).get("value")
+        if ac_raw:
+            ac_hindi, district_hi = resolve_constituency(db, ac_raw)
+            if ac_hindi:
+                parsed["assembly_constituency"]["value"] = ac_hindi
+                parsed["assembly_constituency"]["confidence"] = 0.99
+            if district_hi and not parsed.get("district", {}).get("value"):
+                parsed.setdefault("district", {})["value"] = district_hi
+                parsed["district"]["confidence"] = 0.99
 
         # 5. Save result
         job.status = "completed"
