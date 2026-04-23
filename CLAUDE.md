@@ -31,7 +31,7 @@ python -m app.workers.ocr_worker
 uvicorn app.main:app --host 0.0.0.0 --port 10000
 ```
 
-No test framework or linting tools are configured.
+No test framework or linting tools are configured. Python 3.11 (see `runtime.txt`).
 
 ## Architecture
 
@@ -39,7 +39,7 @@ Layered architecture with strict separation:
 
 ```
 app/
-├── main.py                          # FastAPI app init, table creation, starts worker thread on startup
+├── main.py                          # FastAPI app init, table creation (create_all), starts worker thread on startup
 ├── api/
 │   ├── deps.py                      # Depends: DB session, current user extraction
 │   └── routes/
@@ -71,8 +71,8 @@ app/
 │   ├── security.py                  # JWT creation/decoding, bcrypt hashing
 │   ├── storage.py                   # Supabase Storage client; upload_image() → ocr-images bucket
 │   ├── image_processing.py          # OpenCV preprocessing: crop_rois, enhance_cropped/printed/handwritten
-│   ├── smart_parser.py              # PRIMARY parser: HTML-aware, walks <td>/<th> cells, extracts all 9 fields
-│   ├── constituency_resolver.py     # Fuzzy-matches raw OCR constituency string → canonical Hindi name via DB
+│   ├── smart_parser.py              # PRIMARY parser: HTML+plain-text aware, 3-pass extraction of 9 fields
+│   ├── constituency_resolver.py     # Fuzzy-matches raw OCR constituency string → canonical Hindi name via DB (65% threshold)
 │   └── chandra_ocr_engine.py        # ChandraOCR engine (ACTIVE); datalab-to/chandra-ocr-2 5B VLM; bf16 GPU / fp32 CPU; thread-timeout wrapper (120s GPU / 600s CPU); uses chandra-ocr[hf] library
 ├── workers/
 │   └── ocr_worker.py                # Polling worker — started as daemon thread by main.py; can also run standalone
@@ -86,6 +86,8 @@ app/
 ```
 
 **Request flow:** Route → Schema validation → Service (auth/voter) or direct repo call (OCR) → Repository → DB
+
+**No Alembic migrations** — schema is created via `Base.metadata.create_all()` at startup in `main.py`. Schema changes apply immediately on next deploy.
 
 ## Worker Architecture
 
@@ -101,17 +103,22 @@ The worker has graceful shutdown via `threading.Event` + SIGINT/SIGTERM handlers
 
 ## Parsing Strategy
 
-**Active parser: `parse_smart`** from `core/smart_parser.py` (currently disabled in worker — parsing re-enable pending output format verification):
+**Active parser: `parse_smart`** from `core/smart_parser.py` — called in the worker for every job. Handles two structural patterns:
 
-1. Uses stdlib `HTMLParser` to extract `<td>` and `<th>` cell text (`<br/>` → `\n`).
-2. **Pass 1** — header `<th>` cells: name, EPIC, address from left cell; serial, part, constituency, state from right cell.
-3. **Pass 2** — adjacent label→value `<td>` pairs: mobile, district, state fallback.
+- **Pattern A** (HTML table): Primary data in `<td>/<th>` cells — header cell has name/EPIC/address, adjacent cell has serial/part/constituency/state.
+- **Pattern B** (plain text): Primary data as `"label: value\n"` lines **before** any `<table>` tag; supplemental data still in later tables.
+
+Three passes in order:
+
+1. **Pass 1 — plain-text pre-table section**: Runs first. Extracts Pattern B fields (name/EPIC/address/serial/…) from text before the first `<table>`. Critical: these results are never overwritten by later passes, preventing data bleeding from repeated label sections (e.g. BLO's name in a "पिछले SIR" sub-table).
+2. **Pass 2 — header cells** (multi-field, `\n`-delimited): Walks `<th>`/`<td>` cells for Pattern A. Sets a field only if Pass 1 left it empty.
+3. **Pass 3 — adjacent label→value cell pairs**: Extracts mobile, district, state from consecutive cell pairs.
 
 Key OCR variant handling in `smart_parser.py`:
-- Serial number: `_SERIAL_KEYWORDS` — matches `कण|क्रम|कम` (OCR corrupts क्रम → कम)
-- Constituency: `_CONSTITUENCY_KEYWORDS` — matches `विधानसभा|निधानसभा` (OCR corrupts विधानसभा → निधानसभा)
-- Pass 1 conditions use `any(kw in cell for kw in _KEYWORD_CONSTANT)` — do NOT use `or "string"` pattern (always truthy)
-- EPIC: labeled values trusted without format gating; bare tokens use strict format validation
+- Serial number: `_SERIAL_PREFIX` regex — matches `क्रम|कम|कंप|कण|डम|ब्लॉक|ग्राम` (क्रम संख्या corruptions)
+- Constituency: triggers on `"विधानसभा"`, `"निधानसभा"`, or `"क्षेत्र का"` in cell
+- Pass 2 conditions use `any(kw in cell for kw in _NAME_KEYWORDS)` — do NOT use `or "string"` pattern (always truthy)
+- EPIC: 6 recognized patterns including pure-digit EPICs; labeled values trusted without format gating; bare tokens use strict format validation
 - Confidence: base `0.4` + up to `0.59` from `format_valid`, `label_match`, `clean`, `db_match`; capped at `0.99`. Exceptions: `serial_number` hardcoded to `0.97` if found (bypasses base formula); `state` hardcoded to `0.99` if value == `"उत्तर प्रदेश"`
 
 **Output shape** — all parsers produce the same structure:
@@ -155,7 +162,7 @@ POST   /ocr/upload              # Multipart: file (jpeg/png/jpg/webp/svg/heic/he
 GET    /ocr/result/{job_id}     # Polling endpoint; response shape varies by status:
                                 #   pending/processing → {"job_id": "...", "status": "pending"|"processing"}
                                 #   failed             → {"job_id": "...", "status": "failed", "error": "..."}
-                                #   completed          → {"job_id": "...", "status": "completed", "data": {"raw_text": "..."}}
+                                #   completed          → {"job_id": "...", "status": "completed", "data": {"raw_text": "...", "parsed": {...}}}
 ```
 
 ### Voter
@@ -175,9 +182,10 @@ GET    /voter/export            # Export CSV; filters: name, mobile, epic, assem
 1. `POST /ocr/upload` — HEIC/HEIF converted to JPEG (quality=95), uploaded to Supabase Storage at `{user_id}/{job_id}/{uuid}.{ext}`, Job row created with `status="pending"` and `is_cropped` flag.
 2. Worker polls every 3s; picks oldest pending job → marks `processing`.
 3. Image preprocessing: if `is_cropped=True` uses as-is; otherwise `crop_rois()` extracts `[0:25%h, 0:60%w]` (structured data) + `[25%h:55%h, :]` (form/mobile section) and concatenates vertically.
-4. **Current active engine — ChandraOCR** (`core/chandra_ocr_engine.py`): runs `datalab-to/chandra-ocr-2` (5B VLM) on the preprocessed image using `prompt_type="ocr_layout"`, returns Markdown/HTML via `parse_markdown()` — compatible with `parse_smart()`.
-5. Parsing is **currently disabled** — job is saved with `{raw_text}` only (no `parsed` field). Root cause: `parse_smart` was designed for HTML tables (`<td>/<th>` cells), but ChandraOCR returns plain Markdown. The `HTMLParser` finds no table cells in Markdown and returns empty fields. Re-enabling requires either adapting `smart_parser` to handle Markdown or post-processing ChandraOCR output into HTML tables first.
-6. Job updated to `completed` with `{raw_text}` or `failed` with `error_message`.
+4. **ChandraOCR** runs `datalab-to/chandra-ocr-2` on the preprocessed image using `prompt_type="ocr_layout"`, returns Markdown/HTML via `parse_markdown()`.
+5. **`parse_smart`** runs on the OCR output (3-pass extraction as described above).
+6. **`resolve_constituency`** runs in-band: fuzzy-matches the raw OCR constituency string against DB (65% threshold → canonical Hindi name + district). If ambiguous or unmatched, sets constituency value to `None` and confidence to `0.0`.
+7. Job updated to `completed` with `{"raw_text": ..., "parsed": {...}}` or `failed` with `error_message`.
 
 **Note:** `image_processing.py` also contains `enhance_cropped`, `enhance_printed`, `enhance_handwritten`, `normalize_lighting`, and `remove_shadow` functions, but the active worker pipeline does **not** call them — only `download_image` and `crop_rois` are used.
 
@@ -192,7 +200,7 @@ SUPABASE_URL                    # Supabase project URL
 SUPABASE_SERVICE_ROLE_KEY       # Supabase service role key
 ```
 
-`HF_TOKEN` is not required — `chandra-ocr-2` is a public model.
+`HF_TOKEN`, `SARVAM_BASE_URL`, `SARVAM_API_KEY`, and `ANTHROPIC_API_KEY` appear in `.env` but are not used by any active code path.
 
 ## Render Deployment
 
