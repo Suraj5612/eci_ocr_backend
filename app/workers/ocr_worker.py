@@ -12,42 +12,9 @@ from app.core.image_processing import (
     crop_rois,
 )
 
-# ---------------------------------------------------------------------------
-# OCR engines — swap active engine by toggling the imports below.
-#
-# Engine           | Output          | Parser
-# ---------------- | --------------- | ----------------------------
-# ChandraOCR       | HTML/Markdown   | parse_smart(text)  (no db)  ← ACTIVE
-# SmolVLM-500M     | HTML/Markdown   | parse_smart(text)  (no db)
-# MiniCPM-V        | HTML/Markdown   | parse_smart(text)  (no db)
-# PaddleOCR-VL     | HTML/Markdown   | parse_smart(text)  (no db)
-# LightOnOCR-2     | plain text      | raw_text only
-# Sarvam           | HTML            | parse_smart(text)  (no db)
-# PaddleOCR        | plain text      | parse_ocr_text(text, db)
-# ---------------------------------------------------------------------------
-
-# -- SmolVLM-500M (local testing — low VRAM, weaker Hindi OCR) --
-# from app.core.smolvlm_engine import run_smolvlm
-
-# -- ACTIVE: ChandraOCR — datalab-to/chandra-ocr-2 (5B VLM, Hindi + English) --
 from app.core.chandra_ocr_engine import run_chandra_ocr, warmup as chandra_warmup
-
-# -- MiniCPM-V-2_6 (8B VLM, strong multilingual OCR incl. Hindi) — needs GPU --
-# from app.core.minicpm_v_engine import run_minicpm_v
-
-# -- PaddleOCR-VL (0.9B VLM, 109 langs including Devanagari/Hindi) --
-# from app.core.paddleocr_vl_engine import run_paddleocr_vl
-
-# -- LightOnOCR-2 (1B VLM, SOTA for 1B models) --
-# from app.core.lighton_ocr_engine import run_lighton_ocr
-
-# -- Sarvam OCR + HTML-aware smart parser (production) --
-# from app.core.sarvam import run_sarvam
 from app.core.smart_parser import parse_smart
 from app.core.constituency_resolver import resolve_constituency
-
-# -- Classic PaddleOCR mobile models (local testing) --
-# from app.core.paddleocr_engine import run_paddleocr
 
 
 POLL_INTERVAL = 3  # seconds

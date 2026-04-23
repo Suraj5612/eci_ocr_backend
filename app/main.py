@@ -1,13 +1,7 @@
 import os
 import threading
 
-# Must be set before any paddle/torch import to prevent MPS/OpenMP crashes
-# on macOS Apple Silicon when the process receives a signal or aborts
 os.environ.setdefault("PYTHONUNBUFFERED", "1")
-os.environ.setdefault("FLAGS_call_stack_level", "0")
-os.environ.setdefault("GLOG_minloglevel", "3")
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 from fastapi import FastAPI
 from app.db.session import engine

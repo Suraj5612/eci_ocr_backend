@@ -22,22 +22,15 @@ numpy
 opencv-python
 requests
 rapidfuzz
-anthropic
 pillow-heif
 Pillow
-paddleocr
-paddlepaddle
 
 transformers>=5.0.0
-sentencepiece          # MiniCPM-V tokenizer
-timm                   # MiniCPM-V vision encoder (SigLIP)
-bitsandbytes           # 4-bit NF4 quantization for MiniCPM-V on <22 GB VRAM GPUs (T4 16 GB, RTX 4060 8 GB, etc.)
-qwen-vl-utils          # PaddleOCR-VL image pre-processing
-num2words              # required by SmolVLM2 processor
+accelerate
 # CUDA build — install with: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 # For Render (CPU-only), remove the index-url and use plain: torch torchvision
 torch
 torchvision
-einops
-accelerate
-accelerate
+
+# chandra-ocr[hf] is NOT listed here — must be installed separately:
+chandra-ocr[hf]
