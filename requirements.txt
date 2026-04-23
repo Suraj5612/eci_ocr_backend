@@ -22,3 +22,12 @@ numpy
 opencv-python
 requests
 rapidfuzz
+pillow-heif
+Pillow
+
+transformers>=5.0.0
+accelerate
+# CUDA build — install with: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# For Render (CPU-only), remove the index-url and use plain: torch torchvision
+torch
+torchvision

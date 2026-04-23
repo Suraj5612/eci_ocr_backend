@@ -1,5 +1,6 @@
 # app/api/routes/voter.py
 
+import math
 from typing import Optional
 from uuid import UUID
 
@@ -24,45 +25,117 @@ router = APIRouter()
 
 @router.get("/getVoters")
 def get_voters(
+    epic: Optional[str] = None,
+    page: int = 1,
+    limit: int = 50,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
     try:
+        if epic:
+            booth_id = current_user.booth_id
+
+            if not booth_id:
+                raise AppException(
+                    status_code=403,
+                    code="NO_BOOTH_ASSIGNED",
+                    message="Your account has no booth assigned"
+                )
+
+            query = (
+                db.query(Voter)
+                .filter(
+                    Voter.epic.ilike(f"%{epic.strip()}%"),
+                    Voter.booth_id == booth_id
+                )
+            )
+
+            total = query.count()
+
+            if total == 0:
+                from fastapi.responses import Response
+                return Response(status_code=204)
+
+            total_pages = math.ceil(total / limit) if limit > 0 else 1
+            offset = (page - 1) * limit
+            voters = query.offset(offset).limit(limit).all()
+
+            return success_response(
+                data={
+                    "voters": [
+                        {
+                            "id": str(v.id),
+                            "name": v.name,
+                            "epic": v.epic,
+                            "mobile": v.mobile,
+                            "address": v.address,
+                            "serial_number": v.serial_number,
+                            "part_number_and_name": v.part_number_and_name,
+                            "assembly_constituency_id": v.assembly_constituency_id,
+                            "assembly_constituency_name": v.assembly_constituency_name,
+                            "district": v.district,
+                            "state": v.state,
+                            "mandal_id": v.mandal_id,
+                            "district_id": v.district_id,
+                            "booth_id": v.booth_id,
+                            "user_id": str(v.user_id)
+                        }
+                        for v in voters
+                    ],
+                    "page": page,
+                    "limit": limit,
+                    "total": total,
+                    "totalPages": total_pages,
+                    "isLastPage": page >= total_pages,
+                }
+            )
+
         query = get_base_query(db, current_user)
 
-        voters = query.limit(50).all()
+        total = query.count()
+        total_pages = math.ceil(total / limit) if limit > 0 else 1
+
+        offset = (page - 1) * limit
+        voters = query.offset(offset).limit(limit).all()
 
         return success_response(
-            data=[
-                {
-                    "id": str(v.id),
-                    "name": v.name,
-                    "epic": v.epic,
-                    "mobile": v.mobile,
-                    "address": v.address,
-                    "serial_number": v.serial_number,
-                    "part_number_and_name": v.part_number_and_name,
-                    "assembly_constituency_id": v.assembly_constituency_id,
-                    "assembly_constituency_name": v.assembly_constituency_name,
-                    "district": v.district,
-                    "state": v.state,
-                    "mandal_id": v.mandal_id,
-                    "district_id": v.district_id,
-                    "booth_id": v.booth_id,
-                    "user_id": str(v.user_id)
-                }
-                for v in voters
-            ]
+            data={
+                "voters": [
+                    {
+                        "id": str(v.id),
+                        "name": v.name,
+                        "epic": v.epic,
+                        "mobile": v.mobile,
+                        "address": v.address,
+                        "serial_number": v.serial_number,
+                        "part_number_and_name": v.part_number_and_name,
+                        "assembly_constituency_id": v.assembly_constituency_id,
+                        "assembly_constituency_name": v.assembly_constituency_name,
+                        "district": v.district,
+                        "state": v.state,
+                        "mandal_id": v.mandal_id,
+                        "district_id": v.district_id,
+                        "booth_id": v.booth_id,
+                        "user_id": str(v.user_id)
+                    }
+                    for v in voters
+                ],
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "totalPages": total_pages,
+                "isLastPage": page >= total_pages,
+            }
         )
 
     except AppException:
         raise
 
-    except Exception:
+    except Exception as e:
         raise AppException(
             status_code=500,
             code="INTERNAL_SERVER_ERROR",
-            message="Something went wrong while fetching voters"
+            message=f"Something went wrong while fetching voters: {str(e)}"
         )
 
 @router.post("/save")

@@ -7,14 +7,32 @@ from app.utils.exceptions import AppException
 from app.repositories.job_repo import create_job, get_job_by_id
 from app.core.storage import upload_image as upload_to_storage
 import uuid
+import io
 from app.models.user import User
 
 
 router = APIRouter()
 
-ALLOWED_TYPES = ["image/jpeg", "image/png", "image/jpg", "image/webp"]
+ALLOWED_TYPES = [
+    "image/jpeg", "image/jpg", "image/png", "image/webp",
+    "image/svg+xml", "image/heic", "image/heif",
+]
+
+HEIC_TYPES = {"image/heic", "image/heif"}
 
 MAX_FILE_SIZE = 10 * 1024 * 1024
+
+
+def _convert_heic_to_jpeg(data: bytes) -> bytes:
+    import pillow_heif
+    from PIL import Image
+
+    pillow_heif.register_heif_opener()
+    img = Image.open(io.BytesIO(data))
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=95)
+    return buf.getvalue()
+
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_image(
@@ -37,6 +55,18 @@ async def upload_image(
             detail="File size exceeds 10MB limit"
         )
 
+    filename = file.filename
+
+    if file.content_type in HEIC_TYPES:
+        try:
+            file_bytes = _convert_heic_to_jpeg(file_bytes)
+            filename = f"{uuid.uuid4()}.jpg"
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Failed to convert HEIC image: {str(e)}"
+            )
+
     job_id = str(uuid.uuid4())
 
     try:
@@ -44,7 +74,7 @@ async def upload_image(
             file_bytes=file_bytes,
             user_id=current_user.id,
             job_id=job_id,
-            filename=file.filename
+            filename=filename
         )
     except Exception as e:
         raise HTTPException(
@@ -64,6 +94,10 @@ async def upload_image(
         "status": job.status,
         "isCropped": job.is_cropped
     }
+
+import os
+import json
+from datetime import datetime
 
 @router.get("/result/{job_id}")
 def get_ocr_result(
