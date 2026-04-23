@@ -31,6 +31,3 @@ accelerate
 # For Render (CPU-only), remove the index-url and use plain: torch torchvision
 torch
 torchvision
-
-# chandra-ocr[hf] is NOT listed here — must be installed separately:
-chandra-ocr[hf]
