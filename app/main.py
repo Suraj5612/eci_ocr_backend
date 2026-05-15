@@ -16,10 +16,6 @@ from fastapi.requests import Request
 from app.db.base_model import *  # important
 
 from app.utils.exceptions import AppException
-if os.getenv("OCR_BACKEND", "local") == "colab":
-    from app.workers.colab_ocr_worker import worker
-else:
-    from app.workers.ocr_worker import worker
 from app.api.routes import voter
 
 
@@ -50,6 +46,10 @@ async def app_exception_handler(request: Request, exc: AppException):
 
 @app.on_event("startup")
 def start_worker():
+    if os.getenv("OCR_BACKEND", "local") == "colab":
+        from app.workers.colab_ocr_worker import worker
+    else:
+        from app.workers.ocr_worker import worker
     print("🚀 Starting OCR worker...")
     t = threading.Thread(target=worker, daemon=True)
     t.start()
