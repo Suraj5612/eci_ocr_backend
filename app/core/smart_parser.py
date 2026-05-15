@@ -304,17 +304,27 @@ def _mobile_from_pair(label: str, value: str) -> str | None:
     return None
 
 
+def _strip_district_prefix(v: str) -> str:
+    """Remove 'जिला:', 'जिला :', 'जिला' prefix that OCR sometimes includes in the value."""
+    return re.sub(r"^जिल[ाेोां]*\s*[:]?\s*", "", v).strip()
+
+
 def _district_from_pair(label: str, value: str) -> str | None:
     if re.search(r"^जिल", label.strip()):
-        v = value.strip()
-        return v if v and v not in ("—", "–", "-", "") else None
+        v = _strip_district_prefix(value.strip())
+        return v if v and v not in ("—", "-", "-", "") else None
+    # Also catch when label+value are merged in a single cell: "जिला: लखनऊ"
+    m = re.search(r"^जिल[ाेोां]*\s*[:]\s*(.+)", label.strip())
+    if m:
+        v = _strip_district_prefix(m.group(1).strip())
+        return v if v and v not in ("—", "-", "-", "") else None
     return None
 
 
 def _state_from_pair(label: str, value: str) -> str | None:
     if re.search(r"(?:राज्य|ज्या)\s*(?:का\s*नाम)?", label):
         v = value.strip()
-        return _normalise_state(v) if v and v not in ("—", "–") else None
+        return _normalise_state(v) if v and v not in ("—", "-") else None
     return None
 
 

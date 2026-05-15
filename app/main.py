@@ -16,7 +16,10 @@ from fastapi.requests import Request
 from app.db.base_model import *  # important
 
 from app.utils.exceptions import AppException
-from app.workers.ocr_worker import worker
+if os.getenv("OCR_BACKEND", "local") == "colab":
+    from app.workers.colab_ocr_worker import worker
+else:
+    from app.workers.ocr_worker import worker
 from app.api.routes import voter
 
 
